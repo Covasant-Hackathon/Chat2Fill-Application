@@ -1,1 +1,0 @@
-# covasant-hackathon
