@@ -42,8 +42,6 @@ This document provides step-by-step instructions to set up and run the Chat2Fill
 └── project
     ├── myenv
     ├── client
-    │   ├── dist
-    │   │   └── assets
     │   ├── node_modules
     │   ├── public
     │   └── src
