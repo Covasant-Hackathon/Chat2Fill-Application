@@ -1,6 +1,6 @@
 import os
 
-EXCLUDE_DIRS = {'node_modules','env', 'server','.git','myenv', '__pycache__'}
+EXCLUDE_DIRS = {'node_modules','env','.git','myenv', '__pycache__'}
 
 def print_tree(start_path='.', prefix=''):
     entries = sorted(os.listdir(start_path))
