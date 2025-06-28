@@ -40,7 +40,6 @@ This document provides step-by-step instructions to set up and run the Chat2Fill
 ```bash
 ├── chromedriver
 └── project
-    ├── env
     ├── myenv
     ├── client
     │   ├── dist
