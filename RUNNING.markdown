@@ -128,7 +128,9 @@ The FastAPI server is located in the `project/server` directory.
    Install the required Python packages within the virtual environment:
 
    ```bash
-   pip install fastapi uvicorn fastmcp google-generativeai python-dotenv
+   python -m pip install --upgrade pip
+   pip install fastapi uvicorn fastmcp google-generativeai python-dotenv beautifulsoup4
+   pip install requests beautifulsoup4 selenium webdriver-manager
    ```
 
    If a `requirements.txt` file exists in `project/server`, you can install all dependencies with:
