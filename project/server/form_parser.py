@@ -1,7 +1,10 @@
 import json
 import logging
 import sys
+import os
+import platform
 import time
+import requests
 from uuid import uuid4
 from typing import Dict, List, Any, Optional
 from bs4 import BeautifulSoup
@@ -11,115 +14,206 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import TimeoutException, NoSuchElementException
 from webdriver_manager.chrome import ChromeDriverManager
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
+# Configure logging with timestamp
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
+
+def get_default_chrome_paths() -> tuple[str, str, str]:
+    """
+    Detect default Chrome profile and binary paths based on the operating system.
+    
+    Returns:
+        Tuple of (chrome_profile_path, chrome_profile_name, chrome_binary_path)
+    """
+    system = platform.system()
+    username = os.getlogin() if system != "Darwin" else os.path.expanduser("~").split("/")[-1]
+    
+    profile_path = ""
+    profile_name = "Default"
+    binary_path = ""
+    
+    if system == "Windows":
+        profile_path = f"C:\\Users\\{username}\\AppData\\Local\\Google\\Chrome\\User Data"
+        binary_path = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
+    elif system == "Darwin":  # macOS
+        profile_path = f"/Users/{username}/Library/Application Support/Google/Chrome"
+        binary_path = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+    elif system == "Linux":
+        profile_path = f"/home/{username}/.config/google-chrome"
+        binary_path = "/usr/bin/google-chrome"
+    
+    return profile_path, profile_name, binary_path
+
+def load_config() -> tuple[str, str, str]:
+    """
+    Load Chrome profile and binary settings from config.json if available.
+    
+    Returns:
+        Tuple of (chrome_profile_path, chrome_profile_name, chrome_binary_path)
+    """
+    config_file = "config.json"
+    default_path, default_name, default_binary = get_default_chrome_paths()
+    
+    if os.path.exists(config_file):
+        try:
+            with open(config_file, 'r', encoding='utf-8') as f:
+                config = json.load(f)
+                path = config.get("chrome_profile_path", default_path)
+                name = config.get("chrome_profile_name", default_name)
+                binary = config.get("chrome_binary_path", default_binary)
+                if os.path.exists(path) and os.path.exists(binary):
+                    return path, name, binary
+                logger.warning(f"Invalid paths in config.json: profile={path}, binary={binary}. Using defaults.")
+        except Exception as e:
+            logger.warning(f"Error reading config.json: {str(e)}. Using defaults.")
+    
+    return default_path, default_name, default_binary
 
 class FormParser:
     """A parser for extracting form structure from HTML, Google Forms, Typeform, Microsoft Forms, and custom web forms."""
     
-    def __init__(self):
+    def __init__(self, use_profile: bool = False, debug_mode: bool = False):
         self.supported_input_types = {
             'text', 'number', 'email', 'date', 'tel', 'url', 'password',
             'radio', 'checkbox', 'select', 'textarea', 'file'
         }
         self.driver = None
+        self.debug_mode = debug_mode
+        self.chrome_profile_path, self.chrome_profile_name, self.chrome_binary_path = load_config()
+        if use_profile and not os.path.exists(self.chrome_profile_path):
+            logger.warning(f"Chrome profile path {self.chrome_profile_path} not found.")
+            self.chrome_profile_path = ""
+            self.chrome_profile_name = ""
+        if not os.path.exists(self.chrome_binary_path):
+            logger.warning(f"Chrome binary path {self.chrome_binary_path} not found. Selenium may fail.")
+            self.chrome_binary_path = ""
 
-    def parse_form_from_url(self, url: str, max_retries: int = 2) -> Dict[str, Any]:
+    def save_debug_html(self, html_content: str, filename: str = "debug.html"):
+        """Save the page HTML for debugging."""
+        if self.debug_mode:
+            with open(filename, "w", encoding='utf-8') as f:
+                f.write(html_content)
+            logger.info(f"Debug HTML saved to {filename}")
+
+    def parse_html_content(self, html_input: str, is_file: bool = False) -> Dict[str, Any]:
         """
-        Parse a form from a URL, detecting the form type and delegating to the appropriate parser.
+        Parse static HTML content from a string or file.
         
         Args:
-            url: URL of the form
-            max_retries: Number of retry attempts for transient errors
+            html_input: HTML string or file path to HTML content
+            is_file: If True, treat html_input as a file path; otherwise, treat as HTML string
             
         Returns:
             Dictionary containing parsed form metadata
             
         Raises:
-            ValueError: If parsing fails after retries
-        """
-        for attempt in range(max_retries + 1):
-            try:
-                # Initialize Selenium driver
-                service = Service(ChromeDriverManager().install())
-                options = Options()
-                options.add_argument("--no-sandbox")
-                options.add_argument("--disable-dev-shm-usage")
-                options.add_argument("--disable-gpu")
-                options.add_argument("--disable-extensions")
-                # options.add_argument("--headless")  # Uncomment for headless mode
-                self.driver = webdriver.Chrome(service=service, options=options)
-                self.driver.get(url)
-                time.sleep(2)  # Wait for page to stabilize
-
-                # Detect form type based on URL
-                if "google.com/forms" in url.lower():
-                    return self.parse_google_form(url)
-                elif "typeform.com" in url.lower():
-                    return self.parse_typeform(url)
-                elif "forms.office.com" in url.lower() or "forms.microsoft.com" in url.lower() or "forms.cloud.microsoft" in url.lower():
-                    return self.parse_microsoft_form(url)
-                else:
-                    return self.parse_custom_form(url)
-
-            except Exception as e:
-                logger.warning(f"Attempt {attempt + 1} failed for URL {url}: {str(e)}")
-                if attempt == max_retries:
-                    logger.error(f"Error parsing form from URL {url}: {str(e)}")
-                    raise ValueError(f"Failed to parse form: {str(e)}")
-                time.sleep(1)  # Wait before retrying
-            
-            finally:
-                if self.driver:
-                    try:
-                        self.driver.quit()
-                    except:
-                        pass
-                    self.driver = None
-
-    def parse_html(self, html_content: str) -> Dict[str, Any]:
-        """
-        Parse static HTML content and extract form metadata.
-        
-        Args:
-            html_content: HTML string containing one or more forms
-            
-        Returns:
-            Dictionary containing parsed form metadata
+            ValueError: If parsing fails or file is invalid
         """
         try:
-            soup = BeautifulSoup(html_content, 'lxml')
-            forms = soup.find_all('form')
-            if not forms:
-                logger.warning("No forms found in the provided HTML")
-                return {"forms": []}
+            html_content = ""
+            if is_file:
+                if not os.path.exists(html_input):
+                    raise ValueError(f"HTML file {html_input} does not exist")
+                with open(html_input, 'r', encoding='utf-8') as f:
+                    html_content = f.read()
+            else:
+                html_content = html_input.strip()
+                if not html_content:
+                    raise ValueError("HTML content cannot be empty")
 
-            result = {
-                "forms": [self._parse_form(form) for form in forms]
-            }
+            result = self.parse_html(html_content)
+            self.save_debug_html(html_content, f"debug_html_{str(uuid4())[:8]}.html")
             return result
 
         except Exception as e:
-            logger.error(f"Error parsing HTML: {str(e)}")
-            raise ValueError(f"Failed to parse HTML: {str(e)}")
+            logger.error(f"Error parsing HTML content: {str(e)}")
+            raise ValueError(f"Failed to parse HTML content: {str(e)}")
 
-    def parse_google_form(self, url: str) -> Dict[str, Any]:
+    def parse_form_from_url(self, url: str, form_type: str) -> Dict[str, Any]:
         """
-        Parse a Google Form from a URL.
+        Parse a form from a URL, delegating to the appropriate parser based on form type.
         
         Args:
-            url: Google Form URL
+            url: URL of the form
+            form_type: Type of form ('google', 'typeform', 'microsoft', 'custom')
             
         Returns:
             Dictionary containing parsed form metadata
+            
+        Raises:
+            ValueError: If parsing fails
         """
         try:
-            wait = WebDriverWait(self.driver, 15)
+            # Try static fetching for custom forms
+            if form_type == 'custom':
+                try:
+                    response = requests.get(url, timeout=10)
+                    response.raise_for_status()
+                    html_content = response.text
+                    soup = BeautifulSoup(html_content, 'lxml')
+                    if soup.find('form'):
+                        return self.parse_html(html_content)
+                except requests.RequestException as e:
+                    logger.info(f"Static fetch failed for custom form: {e}. Falling back to Selenium.")
+
+            # Initialize Selenium driver
+            service = Service(ChromeDriverManager().install())
+            options = Options()
+            options.add_argument("--disable-extensions")
+            if self.chrome_binary_path:
+                options.binary_location = self.chrome_binary_path
+            if self.chrome_profile_path and form_type == "microsoft":
+                options.add_argument(f"--user-data-dir={self.chrome_profile_path}")
+                options.add_argument(f"--profile-directory={self.chrome_profile_name}")
+            self.driver = webdriver.Chrome(service=service, options=options)
+            logger.info(f"Initialized WebDriver with binary: {self.chrome_binary_path}")
+            self.driver.get(url)
+
+            # Check for authentication redirect
+            if "login" in self.driver.current_url.lower() and form_type == "microsoft":
+                raise ValueError("Authentication required. Ensure you're logged into Microsoft in Chrome or provide a public form URL.")
+
+            # Save debug HTML
+            self.save_debug_html(self.driver.page_source, f"debug_{form_type}.html")
+
+            # Delegate to appropriate parser
+            if form_type == 'google':
+                return self.parse_google_form(url)
+            elif form_type == 'typeform':
+                return self.parse_typeform(url)
+            elif form_type == 'microsoft':
+                return self.parse_microsoft_form(url)
+            elif form_type == 'custom':
+                return self.parse_custom_form(url)
+            else:
+                raise ValueError("Invalid form type")
+
+        except TimeoutException as e:
+            logger.error(f"Timeout while loading form at {url}: {str(e)}")
+            raise ValueError(f"Failed to load form elements. The page may be slow or inaccessible.")
+        except Exception as e:
+            logger.error(f"Error parsing form from URL {url}: {str(e)}")
+            raise ValueError(f"Failed to parse form: {str(e)}")
+        
+        finally:
+            if self.driver:
+                self.driver.quit()
+
+    def parse_google_form(self, url: str) -> Dict[str, Any]:
+        try:
+            wait = WebDriverWait(self.driver, 30)
+            for _ in range(3):
+                self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+                time.sleep(2)
             question_blocks = wait.until(EC.presence_of_all_elements_located((By.CSS_SELECTOR, 'div[role="listitem"]')))
-            
+            logger.info(f"Found {len(question_blocks)} question blocks")
+
             form_title = "Untitled Google Form"
             try:
                 form_title_elem = self.driver.find_element(By.CSS_SELECTOR, 'div[jsname="r4nke"]')
@@ -135,19 +229,19 @@ class FormParser:
                     field_type = "text"
                     is_required = False
 
-                    if block.find_elements(By.TAG_NAME, "input"):
+                    if block.find_elements(By.CSS_SELECTOR, 'input[type="text"], input[type="email"], input[type="tel"], input[type="number"]'):
                         field_type = "text"
                     elif block.find_elements(By.TAG_NAME, "textarea"):
                         field_type = "paragraph"
-                    elif block.find_elements(By.CSS_SELECTOR, 'div[role="radio"]'):
+                    elif block.find_elements(By.CSS_SELECTOR, 'div[role="radio"], input[type="radio"]'):
                         field_type = "multiple_choice"
-                    elif block.find_elements(By.CSS_SELECTOR, 'div[role="checkbox"]'):
+                    elif block.find_elements(By.CSS_SELECTOR, 'div[role="checkbox"], input[type="checkbox"]'):
                         field_type = "checkbox"
-                    elif block.find_elements(By.CSS_SELECTOR, 'div[role="listbox"]'):
+                    elif block.find_elements(By.CSS_SELECTOR, 'div[role="listbox"], select'):
                         field_type = "dropdown"
 
                     try:
-                        block.find_element(By.CSS_SELECTOR, 'span[aria-label="Required question"]')
+                        block.find_element(By.CSS_SELECTOR, 'span[aria-label="Required question"], span:contains("*")')
                         is_required = True
                     except:
                         is_required = False
@@ -162,16 +256,34 @@ class FormParser:
                     }
 
                     if field_type in ["multiple_choice", "dropdown", "checkbox"]:
-                        option_elements = block.find_elements(By.CSS_SELECTOR, '[role="presentation"]')
-                        options = [opt.text.strip() for opt in option_elements if opt.text.strip()]
+                        option_selectors = [
+                            'div[role="presentation"] span',
+                            'div[role="radio"] span',
+                            'div[role="option"] span',
+                            'label span',
+                            'div.jNTOo span'
+                        ]
+                        options = []
+                        for selector in option_selectors:
+                            try:
+                                option_elements = block.find_elements(By.CSS_SELECTOR, selector)
+                                options = [opt.text.strip() for opt in option_elements if opt.text.strip() and opt.text.strip() != label]
+                                if options:
+                                    break
+                            except:
+                                continue
                         if options:
                             field["options"] = [{"value": opt, "text": opt, "selected": False, "disabled": False} for opt in set(options)]
+                            logger.info(f"Question {idx}: Found {len(options)} options: {options}")
+                        else:
+                            logger.warning(f"Question {idx}: No options found for {field_type}")
 
                     fields_schema.append(field)
 
                 except Exception as e:
                     logger.warning(f"Google Form Question {idx}: Error: {e}")
 
+            self.save_debug_html(self.driver.page_source, f"debug_google_form_{str(uuid4())[:8]}.html")
             return {
                 "forms": [{
                     "id": str(uuid4()),
@@ -183,22 +295,16 @@ class FormParser:
                 }]
             }
 
+        except TimeoutException as e:
+            logger.error(f"Timeout while parsing Google Form: {str(e)}")
+            raise ValueError("Failed to load Google Form elements. Ensure the URL is valid and accessible. Debug HTML saved.")
         except Exception as e:
             logger.error(f"Error parsing Google Form: {str(e)}")
             raise ValueError(f"Failed to parse Google Form: {str(e)}")
 
     def parse_typeform(self, url: str) -> Dict[str, Any]:
-        """
-        Parse a Typeform from a URL.
-        
-        Args:
-            url: Typeform URL
-            
-        Returns:
-            Dictionary containing parsed form metadata
-        """
         try:
-            wait = WebDriverWait(self.driver, 15)
+            wait = WebDriverWait(self.driver, 30)
             question_blocks = wait.until(EC.presence_of_all_elements_located((By.CSS_SELECTOR, '[data-qa="question"]')))
             
             form_title = "Untitled Typeform"
@@ -253,6 +359,7 @@ class FormParser:
                 except Exception as e:
                     logger.warning(f"Typeform Question {idx}: Error: {e}")
 
+            self.save_debug_html(self.driver.page_source, f"debug_typeform_{str(uuid4())[:8]}.html")
             return {
                 "forms": [{
                     "id": str(uuid4()),
@@ -264,30 +371,16 @@ class FormParser:
                 }]
             }
 
+        except TimeoutException as e:
+            logger.error(f"Timeout while parsing Typeform: {str(e)}")
+            raise ValueError("Failed to load Typeform elements. Ensure the URL is valid and accessible. Debug HTML saved.")
         except Exception as e:
             logger.error(f"Error parsing Typeform: {str(e)}")
             raise ValueError(f"Failed to parse Typeform: {str(e)}")
 
     def parse_microsoft_form(self, url: str) -> Dict[str, Any]:
-        """
-        Parse a Microsoft Form from a URL.
-        
-        Args:
-            url: Microsoft Form URL
-            
-        Returns:
-            Dictionary containing parsed form metadata
-        """
         try:
-            wait = WebDriverWait(self.driver, 15)
-            # Check for login page
-            try:
-                login_elem = wait.until(EC.presence_of_element_located((By.NAME, "loginfmt")))
-                logger.warning("Login prompt detected. Form may require authentication.")
-                return {"forms": []}  # Skip if login is required
-            except:
-                pass
-
+            wait = WebDriverWait(self.driver, 30)
             question_blocks = wait.until(EC.presence_of_all_elements_located((By.CSS_SELECTOR, 'div[data-automation-id="questionItem"]')))
             
             form_title = "Untitled Microsoft Form"
@@ -342,6 +435,7 @@ class FormParser:
                 except Exception as e:
                     logger.warning(f"Microsoft Form Question {idx}: Error: {e}")
 
+            self.save_debug_html(self.driver.page_source, f"debug_microsoft_{str(uuid4())[:8]}.html")
             return {
                 "forms": [{
                     "id": str(uuid4()),
@@ -353,24 +447,17 @@ class FormParser:
                 }]
             }
 
+        except TimeoutException as e:
+            logger.error(f"Timeout while parsing Microsoft Form: {str(e)}")
+            raise ValueError("Failed to load Microsoft Form elements. Ensure you're logged in or use a public form URL. Debug HTML saved.")
         except Exception as e:
             logger.error(f"Error parsing Microsoft Form: {str(e)}")
             raise ValueError(f"Failed to parse Microsoft Form: {str(e)}")
 
     def parse_custom_form(self, url: str) -> Dict[str, Any]:
-        """
-        Parse a custom web form from a URL, handling iframes and <form> tags.
-        
-        Args:
-            url: URL of the custom web form
-            
-        Returns:
-            Dictionary containing parsed form metadata
-        """
         try:
-            wait = WebDriverWait(self.driver, 15)
+            wait = WebDriverWait(self.driver, 30)
             
-            # Check for iframes
             iframes = self.driver.find_elements(By.TAG_NAME, "iframe")
             html_content = None
             form_found = False
@@ -387,18 +474,15 @@ class FormParser:
                     logger.debug(f"Iframe parsing error: {e}")
                     self.driver.switch_to.default_content()
 
-            # If no form found in iframes, use main page
             if not form_found:
                 html_content = self.driver.page_source
 
-            # Parse with BeautifulSoup
             soup = BeautifulSoup(html_content, 'lxml')
             form_elements = soup.find_all('form')
 
             if form_elements:
                 return self.parse_html(html_content)
 
-            # Fallback: Heuristic parsing for form-like structures
             logger.warning("No <form> tags found. Attempting heuristic parsing...")
             fields_schema = []
             inputs = soup.find_all(['input', 'select', 'textarea'])
@@ -411,6 +495,7 @@ class FormParser:
                     logger.warning(f"Custom Form Field {idx}: Error: {e}")
 
             form_title = soup.find('title').text.strip() if soup.find('title') else "Untitled Custom Form"
+            self.save_debug_html(html_content, f"debug_custom_{str(uuid4())[:8]}.html")
             return {
                 "forms": [{
                     "id": str(uuid4()),
@@ -422,12 +507,31 @@ class FormParser:
                 }]
             }
 
+        except TimeoutException as e:
+            logger.error(f"Timeout while parsing custom form: {str(e)}")
+            raise ValueError("Failed to load custom form elements. Ensure the URL is valid and accessible. Debug HTML saved.")
         except Exception as e:
             logger.error(f"Error parsing custom form: {str(e)}")
             raise ValueError(f"Failed to parse custom form: {str(e)}")
 
+    def parse_html(self, html_content: str) -> Dict[str, Any]:
+        try:
+            soup = BeautifulSoup(html_content, 'lxml')
+            forms = soup.find_all('form')
+            if not forms:
+                logger.warning("No forms found in the provided HTML")
+                return {"forms": []}
+
+            result = {
+                "forms": [self._parse_form(form) for form in forms]
+            }
+            return result
+
+        except Exception as e:
+            logger.error(f"Error parsing HTML: {str(e)}")
+            raise ValueError(f"Failed to parse HTML: {str(e)}")
+
     def _parse_form(self, form: BeautifulSoup) -> Dict[str, Any]:
-        """Parse a single HTML form element."""
         form_id = form.get('id', str(uuid4()))
         form_name = form.get('name', '')
         action = form.get('action', '')
@@ -446,7 +550,6 @@ class FormParser:
         }
 
     def _parse_fieldsets(self, parent: BeautifulSoup) -> List[Dict[str, Any]]:
-        """Parse all fieldsets within a parent element."""
         fieldsets = []
         for fieldset in parent.find_all('fieldset', recursive=False):
             fieldset_id = fieldset.get('id', str(uuid4()))
@@ -463,7 +566,6 @@ class FormParser:
         return fieldsets
 
     def _parse_fields(self, parent: BeautifulSoup, exclude_fieldsets: bool = False) -> List[Dict[str, Any]]:
-        """Parse all form fields within a parent element."""
         fields = []
         for input_elem in parent.find_all(['input', 'select', 'textarea'], recursive=not exclude_fieldsets):
             field_data = self._parse_field(input_elem)
@@ -472,7 +574,6 @@ class FormParser:
         return fields
 
     def _parse_field(self, element: BeautifulSoup) -> Optional[Dict[str, Any]]:
-        """Parse a single form field."""
         tag_name = element.name.lower()
         field_type = element.get('type', tag_name).lower()
 
@@ -508,7 +609,6 @@ class FormParser:
         return field_data
 
     def _find_label(self, element: BeautifulSoup) -> str:
-        """Find the label associated with a form field."""
         if element.get('id'):
             label = element.find_parent('form').find('label', {'for': element.get('id')}) if element.find_parent('form') else None
             if label:
@@ -520,25 +620,7 @@ class FormParser:
             return element.get('aria-label')
         return f"Untitled Field {str(uuid4())[:8]}"
 
-    def _extract_validation(self, element: BeautifulSoup) -> Dict[str, Any]:
-        """Extract validation rules for a field."""
-        validation = {}
-        if element.get('minlength'):
-            validation['minlength'] = int(element.get('minlength'))
-        if element.get('maxlength'):
-            validation['maxlength'] = int(element.get('maxlength'))
-        if element.get('min'):
-            validation['min'] = float(element.get('min')) if element.get('type') in {'number', 'range'} else element.get('min')
-        if element.get('max'):
-            validation['max'] = float(element.get('max')) if element.get('type') in {'number', 'range'} else element.get('max')
-        if element.get('pattern'):
-            validation['pattern'] = element.get('pattern')
-        if element.get('required'):
-            validation['required'] = True
-        return validation
-
     def _parse_select_options(self, select: BeautifulSoup) -> List[Dict[str, str]]:
-        """Parse options for a select element."""
         options = []
         for option in select.find_all('option'):
             options.append({
@@ -548,6 +630,22 @@ class FormParser:
                 'disabled': option.get('disabled') is not None
             })
         return options
+
+    def _extract_validation(self, element: BeautifulSoup) -> Dict[str, Any]:
+        validation = {}
+        if element.get('required') is not None:
+            validation['required'] = True
+        if element.get('pattern'):
+            validation['pattern'] = element.get('pattern')
+        if element.get('min'):
+            validation['min'] = element.get('min')
+        if element.get('max'):
+            validation['max'] = element.get('max')
+        if element.get('minlength'):
+            validation['minlength'] = element.get('minlength')
+        if element.get('maxlength'):
+            validation['maxlength'] = element.get('maxlength')
+        return validation
 
     def to_json(self, data: Dict[str, Any], pretty: bool = True) -> str:
         """
@@ -568,93 +666,95 @@ class FormParser:
             logger.error(f"Error converting to JSON: {str(e)}")
             raise ValueError(f"Failed to convert data to JSON: {str(e)}")
 
-def run_tests():
-    """Run test cases for FormParser."""
-    parser = FormParser()
+    def run_interactive(self):
+        """Run the parser interactively for testing HTML or URL-based form parsing."""
+        print("\n=== Form Parser ===")
+        print("Select the type of form to parse:")
+        print("1. HTML Form (paste HTML or provide file path)")
+        print("2. Google Form (provide URL)")
+        print("3. Typeform (provide URL)")
+        print("4. Microsoft Form (provide URL)")
+        print("5. Custom Web Form (provide URL)")
+        debug_mode = input("\nEnable debug mode (saves HTML for troubleshooting)? [y/N]: ").strip().lower() == 'y'
 
-    # Test Case 1: Simple HTML form
-    simple_form = """
-    <form id="simple-form" action="/submit" method="POST">
-        <label for="username">Username</label>
-        <input type="text" id="username" name="username" required>
-        <input type="submit" value="Submit">
-    </form>
-    """
+        while True:
+            try:
+                choice = input("\nEnter the number (1-5) or 'q' to quit: ").strip().lower()
+                if choice == 'q':
+                    print("Exiting...")
+                    break
 
-    # Test Case 2: Scholarship HTML Form
-    scholarship_form = """
-    <form id="scholarshipForm">
-        <label for="name">Full Name:</label>
-        <input type="text" id="name" name="fullname" required>
-        <label for="dob">Date of Birth:</label>
-        <input type="date" id="dob" name="dob" required>
-        <label for="category">Caste Category:</label>
-        <select id="category" name="category">
-            <option value="gen">General</option>
-            <option value="obc">OBC</option>
-            <option value="sc">SC</option>
-            <option value="st">ST</option>
-        </select>
-        <label for="income">Annual Family Income (in ₹):</label>
-        <input type="number" id="income" name="income">
-        <button type="submit">Submit Application</button>
-    </form>
-    """
+                if not choice.isdigit() or int(choice) not in range(1, 6):
+                    print("Invalid choice. Please enter a number between 1 and 5, or 'q' to quit.")
+                    continue
 
-    # Test Case 3: Google Form
-    google_form_url = "https://docs.google.com/forms/d/e/1FAIpQLSfy84bLTrN9-na_IseUdwJm-R7DroXBDWopNwKEG1Lj6lq1Fw/viewform"
+                choice = int(choice)
+                form_types = {2: 'google', 3: 'typeform', 4: 'microsoft', 5: 'custom'}
+                output_file = f"parsed_{['html', 'google', 'typeform', 'microsoft', 'custom'][choice-1]}_form.json"
 
-    # Test Case 4: Typeform (Placeholder URL - replace with real Typeform URL)
-    typeform_url = "https://form.typeform.com/to/placeholder"  # Replace with valid Typeform URL
+                # Initialize parser
+                parser = FormParser(use_profile=(choice == 4), debug_mode=debug_mode)
+                if choice == 4 and parser.chrome_profile_path:
+                    print(f"\nUsing Chrome profile: {parser.chrome_profile_path}\\{parser.chrome_profile_name}")
+                    print("Ensure you are logged into your Microsoft account in Chrome.")
 
-    # Test Case 5: Microsoft Form
-    microsoft_form_url = "https://forms.cloud.microsoft/r/qqPu4N8rqB?origin=lprLink"
+                if choice == 1:
+                    print("\nFor HTML Form, you can:")
+                    print("1. Paste HTML content directly")
+                    print("2. Provide a file path containing HTML")
+                    html_choice = input("Enter 1 or 2: ").strip()
+                    
+                    html_input = ""
+                    is_file = False
+                    if html_choice == '1':
+                        print("Paste your HTML content (press Enter twice to finish):")
+                        lines = []
+                        while True:
+                            line = input()
+                            if line == "":
+                                if lines and lines[-1] == "":
+                                    break
+                                lines.append("")
+                            else:
+                                lines.append(line)
+                        html_input = "\n".join(lines)
+                    elif html_choice == '2':
+                        html_input = input("Enter the file path to the HTML file: ").strip()
+                        is_file = True
+                    else:
+                        print("Invalid choice. Please enter 1 or 2.")
+                        continue
 
-    # Test Case 6: Custom Web Form
-    custom_form_url = "https://www.w3.org/WAI/tutorials/forms/simple-form/"  # Simple contact form
+                    result = parser.parse_html_content(html_input, is_file)
 
-    # Run tests
-    try:
-        sys.stdout.reconfigure(encoding='utf-8')
+                else:
+                    url = input(f"\nEnter the {['HTML', 'Google Form', 'Typeform', 'Microsoft Form', 'Custom Web Form'][choice-1]} URL: ").strip()
+                    if not url:
+                        print("URL cannot be empty.")
+                        continue
+                    result = parser.parse_form_from_url(url, form_types[choice])
 
-        print("Test 1: Simple HTML Form")
-        result1 = parser.parse_html(simple_form)
-        print(parser.to_json(result1))
-        with open("simple_form_schema.json", "w", encoding='utf-8') as f:
-            json.dump(result1, f, indent=4, ensure_ascii=False)
+                # Output results
+                print("\n=== Parsed Form Schema ===")
+                json_output = parser.to_json(result)
+                print(json_output)
 
-        print("\nTest 2: Scholarship HTML Form")
-        result2 = parser.parse_html(scholarship_form)
-        print(parser.to_json(result2))
-        with open("scholarship_form_schema.json", "w", encoding='utf-8') as f:
-            json.dump(result2, f, indent=4, ensure_ascii=False)
+                # Save to file
+                with open(output_file, "w", encoding='utf-8') as f:
+                    json.dump(result, f, indent=4, ensure_ascii=False)
+                print(f"\nSchema saved to {output_file}")
 
-        print("\nTest 3: Google Form")
-        result3 = parser.parse_form_from_url(google_form_url)
-        print(parser.to_json(result3))
-        with open("google_form_schema.json", "w", encoding='utf-8') as f:
-            json.dump(result3, f, indent=4, ensure_ascii=False)
-
-        print("\nTest 4: Typeform")
-        result4 = parser.parse_form_from_url(typeform_url)
-        print(parser.to_json(result4))
-        with open("typeform_schema.json", "w", encoding='utf-8') as f:
-            json.dump(result4, f, indent=4, ensure_ascii=False)
-
-        print("\nTest 5: Microsoft Form")
-        result5 = parser.parse_form_from_url(microsoft_form_url)
-        print(parser.to_json(result5))
-        with open("microsoft_form_schema.json", "w", encoding='utf-8') as f:
-            json.dump(result5, f, indent=4, ensure_ascii=False)
-
-        print("\nTest 6: Custom Web Form")
-        result6 = parser.parse_form_from_url(custom_form_url)
-        print(parser.to_json(result6))
-        with open("custom_form_schema.json", "w", encoding='utf-8') as f:
-            json.dump(result6, f, indent=4, ensure_ascii=False)
-
-    except Exception as e:
-        print(f"Test failed: {str(e)}")
+            except ValueError as e:
+                print(f"Error: {str(e)}")
+                if debug_mode:
+                    print(f"Check debug HTML file (e.g., debug_html_*.html) for the page structure.")
+                print("Please try again.")
+            except Exception as e:
+                print(f"Unexpected error: {str(e)}")
+                if debug_mode:
+                    print(f"Check debug HTML file (e.g., debug_html_*.html) for the page structure.")
+                print("Please try again.")
 
 if __name__ == "__main__":
-    run_tests()
+    sys.stdout.reconfigure(encoding='utf-8')
+    FormParser().run_interactive()
