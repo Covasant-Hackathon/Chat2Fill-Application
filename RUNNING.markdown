@@ -96,11 +96,10 @@ The FastAPI server is located in the `project/server` directory.
 
    - On Windows (if `myenv` is in the project root):
      ```bash
-     ..\myenv\Scripts\activate
-     ```
-     or, if `myenv` is in `project/server`:
-     ```bash
+     cd ..
+     python -m venv myenv
      .\myenv\Scripts\activate
+     cd server
      ```
    - On macOS/Linux (if `myenv` is in the project root):
      ```bash
