@@ -635,11 +635,11 @@ def run_tests():
         with open("google_form_schema.json", "w", encoding='utf-8') as f:
             json.dump(result3, f, indent=4, ensure_ascii=False)
 
-        # print("\nTest 4: Typeform")
-        # result4 = parser.parse_form_from_url(typeform_url)
-        # print(parser.to_json(result4))
-        # with open("typeform_schema.json", "w", encoding='utf-8') as f:
-        #     json.dump(result4, f, indent=4, ensure_ascii=False)
+        print("\nTest 4: Typeform")
+        result4 = parser.parse_form_from_url(typeform_url)
+        print(parser.to_json(result4))
+        with open("typeform_schema.json", "w", encoding='utf-8') as f:
+            json.dump(result4, f, indent=4, ensure_ascii=False)
 
         print("\nTest 5: Microsoft Form")
         result5 = parser.parse_form_from_url(microsoft_form_url)
