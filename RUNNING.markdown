@@ -139,10 +139,13 @@ The FastAPI server is located in the `project/server` directory.
    pip install -r requirements.txt
    ```
 
-4. **Set Up ChromeDriver**:
-   Ensure `chromedriver.exe` (located in the project root) is accessible and compatible with your Chrome browser version. If needed, update ChromeDriver:
-   - Download the latest version from [ChromeDriver downloads](https://chromedriver.chromium.org/downloads).
-   - Place it in the project root or update the path in `form_parser.py` (if specified).
+4. **Setup config.json**:
+   Open you `project/server/config.json`
+   ```bash
+   "chrome_profile_path": "C:\\Users\\<Your_UserName>\\AppData\\Local\\Google\\Chrome\\User Data",
+   "chrome_profile_name": "<Your_Profile_Name>",
+   "chrome_binary_path": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+   ```
 
 ### 4. Running the Application
 
