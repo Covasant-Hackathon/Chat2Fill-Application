@@ -35,6 +35,23 @@ This document provides step-by-step instructions to set up and run the Chat2Fill
 - **Virtual Environment**: A Python virtual environment (`myenv`) is located in the project root (`C:\Users\athar\Desktop\Project-Covasant_Hackathon\Covasant_Hackathon`) or `project/server` directory.
 - **Environment Variables**: A `.env` file in `project/server` should contain the `GEMINI_API_KEY` for the Gemini API.
 
+## Tree Structure Folders Only
+
+```bash
+├── chromedriver
+└── project
+    ├── client
+    │   ├── dist
+    │   │   └── assets
+    │   ├── node_modules
+    │   ├── public
+    │   └── src
+    │       └── assets
+    ├── env
+    ├── myenv
+    └── server
+```
+
 ## Setup Instructions
 
 ### 1. Clone the Repository (if applicable)
