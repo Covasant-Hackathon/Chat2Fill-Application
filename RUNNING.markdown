@@ -54,18 +54,6 @@ The React client is located in the `project/client` directory.
    ```
    This installs `axios`, `react-json-view`, and other dependencies listed in `package.json`.
 
-3. **Verify Fonts**:
-   Ensure the Roboto font is included in `project/client/index.html`:
-   ```html
-   <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&display=swap" rel="stylesheet">
-   ```
-
-4. **Configure API Base URL**:
-   Ensure `project/client/src/App.jsx` uses the local server URL:
-   ```javascript
-   const API_BASE_URL = 'http://localhost:8000';
-   ```
-
 ### 3. Set Up the Server
 The FastAPI server is located in the `project/server` directory.
 
@@ -102,13 +90,6 @@ The FastAPI server is located in the `project/server` directory.
    ```bash
    pip install -r requirements.txt
    ```
-
-4. **Configure Environment Variables**:
-   Ensure the `.env` file in `project/server` contains the `GEMINI_API_KEY`:
-   ```env
-   GEMINI_API_KEY=your-gemini-api-key
-   ```
-   Replace `your-gemini-api-key` with your actual Gemini API key.
 
 5. **Set Up ChromeDriver**:
    Ensure `chromedriver.exe` (located in the project root) is accessible and compatible with your Chrome browser version. If needed, update ChromeDriver:
