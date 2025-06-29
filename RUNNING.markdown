@@ -130,7 +130,7 @@ The FastAPI server is located in the `project/server` directory.
    ```bash
    python -m pip install --upgrade pip
    pip install fastapi uvicorn fastmcp google-generativeai python-dotenv beautifulsoup4
-   pip install requests beautifulsoup4 selenium webdriver-manager
+   pip install requests beautifulsoup4 selenium webdriver-manager lxml
    pip install langchain langchain-openai langchain-community llama-cpp-python pytest python-dotenv
    ```
 
