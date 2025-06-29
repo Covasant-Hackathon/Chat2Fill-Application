@@ -5,6 +5,7 @@ import os
 import platform
 import time
 import requests
+import threading
 from uuid import uuid4
 from typing import Dict, List, Any, Optional
 from bs4 import BeautifulSoup
@@ -23,6 +24,32 @@ logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+# Directory for debug files
+DEBUG_DIR = "debug_html"
+if not os.path.exists(DEBUG_DIR):
+    os.makedirs(DEBUG_DIR)
+
+def cleanup_debug_files():
+    """Run in a background thread to delete debug HTML files older than 24 hours."""
+    while True:
+        try:
+            now = time.time()
+            for filename in os.listdir(DEBUG_DIR):
+                file_path = os.path.join(DEBUG_DIR, filename)
+                if os.path.isfile(file_path) and filename.startswith("debug_") and filename.endswith(".html"):
+                    file_age = now - os.path.getmtime(file_path)
+                    if file_age > 24 * 3600:  # 24 hours in seconds
+                        os.remove(file_path)
+                        logger.info(f"Deleted old debug file: {file_path}")
+            time.sleep(3600)  # Check every hour
+        except Exception as e:
+            logger.error(f"Error during debug file cleanup: {str(e)}")
+            time.sleep(3600)
+
+# Start cleanup thread
+cleanup_thread = threading.Thread(target=cleanup_debug_files, daemon=True)
+cleanup_thread.start()
 
 def get_default_chrome_paths() -> tuple[str, str, str]:
     """
@@ -97,9 +124,10 @@ class FormParser:
     def save_debug_html(self, html_content: str, filename: str = "debug.html"):
         """Save the page HTML for debugging."""
         if self.debug_mode:
-            with open(filename, "w", encoding='utf-8') as f:
+            file_path = os.path.join(DEBUG_DIR, filename)
+            with open(file_path, "w", encoding='utf-8') as f:
                 f.write(html_content)
-            logger.info(f"Debug HTML saved to {filename}")
+            logger.info(f"Debug HTML saved to {file_path}")
 
     def parse_html_content(self, html_input: str, is_file: bool = False) -> Dict[str, Any]:
         """
@@ -156,7 +184,7 @@ class FormParser:
                     response = requests.get(url, timeout=10)
                     response.raise_for_status()
                     html_content = response.text
-                    soup = BeautifulSoup(html_content, 'lxml')
+                    soup = self._create_soup(html_content)
                     if soup.find('form'):
                         return self.parse_html(html_content)
                 except requests.RequestException as e:
@@ -204,6 +232,14 @@ class FormParser:
         finally:
             if self.driver:
                 self.driver.quit()
+
+    def _create_soup(self, html_content: str) -> BeautifulSoup:
+        """Create a BeautifulSoup object with lxml parser or fallback to html.parser."""
+        try:
+            return BeautifulSoup(html_content, 'lxml')
+        except Exception as e:
+            logger.warning(f"Failed to use lxml parser: {str(e)}. Falling back to html.parser.")
+            return BeautifulSoup(html_content, 'html.parser')
 
     def parse_google_form(self, url: str) -> Dict[str, Any]:
         try:
@@ -477,7 +513,7 @@ class FormParser:
             if not form_found:
                 html_content = self.driver.page_source
 
-            soup = BeautifulSoup(html_content, 'lxml')
+            soup = self._create_soup(html_content)
             form_elements = soup.find_all('form')
 
             if form_elements:
@@ -516,7 +552,7 @@ class FormParser:
 
     def parse_html(self, html_content: str) -> Dict[str, Any]:
         try:
-            soup = BeautifulSoup(html_content, 'lxml')
+            soup = self._create_soup(html_content)
             forms = soup.find_all('form')
             if not forms:
                 logger.warning("No forms found in the provided HTML")

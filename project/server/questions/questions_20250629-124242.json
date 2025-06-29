@@ -1,0 +1,22 @@
+[
+    {
+        "field_id": "name",
+        "label": "Full Name:",
+        "question": "Can you please provide your full name?"
+    },
+    {
+        "field_id": "dob",
+        "label": "Date of Birth:",
+        "question": "Can you please tell me your date of birth?"
+    },
+    {
+        "field_id": "category",
+        "label": "Caste Category:",
+        "question": "Can you tell me what caste category you belong to?"
+    },
+    {
+        "field_id": "income",
+        "label": "Annual Family Income (in ₹):",
+        "question": "Can you tell me your annual family income in Indian rupees?"
+    }
+]

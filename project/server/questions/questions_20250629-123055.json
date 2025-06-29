@@ -1,0 +1,32 @@
+[
+    {
+        "field_id": "e5f8cc6f-41c8-4f0c-9210-d8219aaa8e2a",
+        "label": "Name / Company Name",
+        "question": "What is your name or company name (if applicable)?"
+    },
+    {
+        "field_id": "05e666f7-7718-460c-9cfe-964aca9ff313",
+        "label": "Email",
+        "question": "Can you please enter your email address?"
+    },
+    {
+        "field_id": "26cdffd5-0747-48f5-8d77-5974e86d8f4b",
+        "label": "Address / Located At",
+        "question": "Could you tell us more about where your business is located?"
+    },
+    {
+        "field_id": "ca155d94-05bc-4b16-8d91-5cbfac06116c",
+        "label": "Phone Number (with Country Code)",
+        "question": "Can you please enter your phone number with country code?"
+    },
+    {
+        "field_id": "f7477583-3850-40e7-8560-81ae40e12b10",
+        "label": "Which Job are you Looking for?",
+        "question": "What job or role are you currently searching for, and what qualities or skills do you think would make you an ideal fit?"
+    },
+    {
+        "field_id": "48dd76bc-da18-4421-bfd3-756791acd4bf",
+        "label": "Are you a:",
+        "question": "Are you an Employer or a Job Seeker?"
+    }
+]

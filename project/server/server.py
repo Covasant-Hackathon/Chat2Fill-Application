@@ -1,9 +1,12 @@
 import logging
 import json
 import os
+import time
+import threading
 from fastmcp import FastMCP
 import google.generativeai as genai
 from form_parser import FormParser
+from llm_conversation import LLMConversation
 from dotenv import load_dotenv
 
 # Configure logging
@@ -17,6 +20,33 @@ logger = logging.getLogger(__name__)
 parent_path = os.path.join(os.path.dirname(__file__),'.env')
 load_dotenv(parent_path)
 logger.info("Loading environment variables")
+
+# Directory for saving questions
+QUESTIONS_DIR = "questions"
+if not os.path.exists(QUESTIONS_DIR):
+    os.makedirs(QUESTIONS_DIR)
+
+# Cleanup thread for question files
+def cleanup_question_files():
+    """Run in a background thread to delete question JSON files older than 24 hours."""
+    while True:
+        try:
+            now = time.time()
+            for filename in os.listdir(QUESTIONS_DIR):
+                file_path = os.path.join(QUESTIONS_DIR, filename)
+                if os.path.isfile(file_path) and filename.startswith("questions_") and filename.endswith(".json"):
+                    file_age = now - os.path.getmtime(file_path)
+                    if file_age > 24 * 3600:  # 24 hours in seconds
+                        os.remove(file_path)
+                        logger.info(f"Deleted old question file: {file_path}")
+            time.sleep(3600)  # Check every hour
+        except Exception as e:
+            logger.error(f"Error during question file cleanup: {str(e)}")
+            time.sleep(3600)
+
+# Start cleanup thread
+cleanup_thread = threading.Thread(target=cleanup_question_files, daemon=True)
+cleanup_thread.start()
 
 # Configure Gemini API
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
@@ -32,6 +62,14 @@ try:
     logger.info("Gemini model initialized")
 except Exception as e:
     logger.error(f"Failed to initialize Gemini model: {str(e)}")
+    raise
+
+# Initialize LLMConversation
+try:
+    llm_conv = LLMConversation()
+    logger.info("LLMConversation initialized")
+except Exception as e:
+    logger.error(f"Failed to initialize LLMConversation: {str(e)}")
     raise
 
 # Initialize FastMCP
@@ -53,7 +91,7 @@ def parse_form(url: str, form_type: str) -> dict:
         form_type (str): Type of form ('google', 'typeform', 'microsoft', 'custom').
     
     Returns:
-        dict: Parsed form schema, status, Gemini validation message, or error message.
+        dict: Parsed form schema, status, Gemini validation message, or error message, and conversational questions.
     """
     logger.info(f"Received parse_form request: url={url}, form_type={form_type}")
     try:
@@ -64,7 +102,8 @@ def parse_form(url: str, form_type: str) -> dict:
                 "status": "error",
                 "error": "URL is empty or exceeds maximum length of 2000 characters",
                 "gemini_message": "",
-                "form_schema": {}
+                "form_schema": {},
+                "questions": []
             }
         
         if form_type not in {'google', 'typeform', 'microsoft', 'custom'}:
@@ -73,7 +112,8 @@ def parse_form(url: str, form_type: str) -> dict:
                 "status": "error",
                 "error": "Invalid form type. Must be one of: google, typeform, microsoft, custom",
                 "gemini_message": "",
-                "form_schema": {}
+                "form_schema": {},
+                "questions": []
             }
 
         # Use Gemini to validate the URL and form type
@@ -96,7 +136,8 @@ def parse_form(url: str, form_type: str) -> dict:
                 "status": "error",
                 "error": "Invalid Gemini response: No text content",
                 "gemini_message": "",
-                "form_schema": {}
+                "form_schema": {},
+                "questions": []
             }
 
         # Extract and clean text
@@ -117,7 +158,8 @@ def parse_form(url: str, form_type: str) -> dict:
                 "status": "error",
                 "error": "Failed to parse Gemini response",
                 "gemini_message": gemini_data,
-                "form_schema": {}
+                "form_schema": {},
+                "questions": []
             }
 
         # Extract validated URL and form type
@@ -129,7 +171,8 @@ def parse_form(url: str, form_type: str) -> dict:
                 "status": "error",
                 "error": gemini_result.get("message", "Invalid input from Gemini"),
                 "gemini_message": gemini_result.get("message", ""),
-                "form_schema": {}
+                "form_schema": {},
+                "questions": []
             }
 
         # Initialize parser
@@ -141,12 +184,26 @@ def parse_form(url: str, form_type: str) -> dict:
         form_schema = parser.parse_form_from_url(validated_url, validated_form_type)
         logger.info("Form parsed successfully")
 
+        # Generate conversational questions
+        questions = llm_conv.generate_questions(form_schema, context=f"Parsing a {validated_form_type} form from {validated_url}")
+
+        # Save questions to a file
+        timestamp = time.strftime("%Y%m%d-%H%M%S")
+        questions_file = os.path.join(QUESTIONS_DIR, f"questions_{timestamp}.json")
+        try:
+            with open(questions_file, "w", encoding='utf-8') as f:
+                json.dump(questions, f, indent=4, ensure_ascii=False)
+            logger.info(f"Saved questions to {questions_file}")
+        except Exception as e:
+            logger.error(f"Failed to save questions to {questions_file}: {str(e)}")
+
         return {
             "status": "success",
             "form_schema": form_schema,
             "gemini_url": validated_url,
             "gemini_form_type": validated_form_type,
-            "gemini_message": gemini_result.get("message", "")
+            "gemini_message": gemini_result.get("message", ""),
+            "questions": questions
         }
 
     except ValueError as e:
@@ -155,7 +212,8 @@ def parse_form(url: str, form_type: str) -> dict:
             "status": "error",
             "error": str(e),
             "gemini_message": gemini_result.get("message", "") if 'gemini_result' in locals() else "",
-            "form_schema": {}
+            "form_schema": {},
+            "questions": []
         }
     except Exception as e:
         logger.error(f"Server error processing form at '{url}': {str(e)}")
@@ -163,7 +221,8 @@ def parse_form(url: str, form_type: str) -> dict:
             "status": "error",
             "error": f"Server error: {str(e)}",
             "gemini_message": gemini_result.get("message", "") if 'gemini_result' in locals() else "",
-            "form_schema": {}
+            "form_schema": {},
+            "questions": []
         }
 
 # Define MCP tool for HTML content parsing
@@ -177,7 +236,7 @@ def parse_html_form(html_input: str, is_file: bool = False) -> dict:
         is_file (bool): If True, treat html_input as a file path; otherwise, treat as HTML string.
     
     Returns:
-        dict: Parsed form schema, status, and optional Gemini validation message.
+        dict: Parsed form schema, status, optional Gemini validation message, and conversational questions.
     """
     logger.info(f"Received parse_html_form request: is_file={is_file}")
     try:
@@ -188,7 +247,8 @@ def parse_html_form(html_input: str, is_file: bool = False) -> dict:
                 "status": "error",
                 "error": "HTML input cannot be empty",
                 "gemini_message": "",
-                "form_schema": {}
+                "form_schema": {},
+                "questions": []
             }
 
         # Optional Gemini validation for HTML content
@@ -220,7 +280,8 @@ def parse_html_form(html_input: str, is_file: bool = False) -> dict:
                         "status": "error",
                         "error": gemini_message or "Invalid HTML form structure",
                         "gemini_message": gemini_message,
-                        "form_schema": {}
+                        "form_schema": {},
+                        "questions": []
                     }
             except json.JSONDecodeError as e:
                 logger.warning(f"Failed to parse Gemini response for HTML validation: {str(e)}")
@@ -235,10 +296,24 @@ def parse_html_form(html_input: str, is_file: bool = False) -> dict:
         form_schema = parser.parse_html_content(html_input, is_file)
         logger.info("HTML parsed successfully")
 
+        # Generate conversational questions
+        questions = llm_conv.generate_questions(form_schema, context="Parsing a static HTML form")
+
+        # Save questions to a file
+        timestamp = time.strftime("%Y%m%d-%H%M%S")
+        questions_file = os.path.join(QUESTIONS_DIR, f"questions_{timestamp}.json")
+        try:
+            with open(questions_file, "w", encoding='utf-8') as f:
+                json.dump(questions, f, indent=4, ensure_ascii=False)
+            logger.info(f"Saved questions to {questions_file}")
+        except Exception as e:
+            logger.error(f"Failed to save questions to {questions_file}: {str(e)}")
+
         return {
             "status": "success",
             "form_schema": form_schema,
-            "gemini_message": gemini_message
+            "gemini_message": gemini_message,
+            "questions": questions
         }
 
     except ValueError as e:
@@ -247,7 +322,8 @@ def parse_html_form(html_input: str, is_file: bool = False) -> dict:
             "status": "error",
             "error": str(e),
             "gemini_message": gemini_message if 'gemini_message' in locals() else "",
-            "form_schema": {}
+            "form_schema": {},
+            "questions": []
         }
     except Exception as e:
         logger.error(f"Server error parsing HTML: {str(e)}")
@@ -255,7 +331,8 @@ def parse_html_form(html_input: str, is_file: bool = False) -> dict:
             "status": "error",
             "error": f"Server error: {str(e)}",
             "gemini_message": gemini_message if 'gemini_message' in locals() else "",
-            "form_schema": {}
+            "form_schema": {},
+            "questions": []
         }
 
 # Run the server

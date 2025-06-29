@@ -20,6 +20,20 @@ const App = () => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [chatHistory]);
 
+  // Function to download JSON file
+  const downloadJsonFile = (data, filename) => {
+    const blob = new Blob([JSON.stringify(data, null, 2)], {
+      type: "application/json",
+    });
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(link.href);
+  };
+
   const handleUrlSubmit = async (e) => {
     e.preventDefault();
     setLoading(true);
@@ -38,12 +52,17 @@ const App = () => {
         url,
         form_type: formType,
       });
-      console.log("Server response:", response.data); // Debug log
+      console.log("Server response:", response.data);
       setChatHistory((prev) => {
         const updated = [...prev];
         updated[updated.length - 1].response = response.data;
         return updated;
       });
+      // Download JSON file automatically
+      if (response.data.status === "success" && response.data.form_schema) {
+        const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+        downloadJsonFile(response.data, `form_response_${timestamp}.json`);
+      }
     } catch (err) {
       setError(err.response?.data?.detail || "Failed to parse form");
       setChatHistory((prev) => {
@@ -81,12 +100,17 @@ const App = () => {
           is_file: isFile,
         }
       );
-      console.log("Server response:", response.data); // Debug log
+      console.log("Server response:", response.data);
       setChatHistory((prev) => {
         const updated = [...prev];
         updated[updated.length - 1].response = response.data;
         return updated;
       });
+      // Download JSON file automatically
+      if (response.data.status === "success" && response.data.form_schema) {
+        const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+        downloadJsonFile(response.data, `form_response_${timestamp}.json`);
+      }
     } catch (err) {
       setError(err.response?.data?.detail || "Failed to parse HTML form");
       setChatHistory((prev) => {
@@ -111,15 +135,13 @@ const App = () => {
   // Flatten form schema for table display
   const flattenSchema = (schema) => {
     const fields = [];
-    console.log("Schema received:", schema); // Debug log
+    console.log("Schema received:", schema);
 
-    // Check if schema is valid and has the expected structure
     if (!schema || typeof schema !== "object") {
       console.warn("Invalid schema: Schema is not an object");
       return fields;
     }
 
-    // Access fields under forms[0].fields (no root key)
     const formFields = schema.forms?.[0]?.fields;
     if (!formFields || !Array.isArray(formFields)) {
       console.warn("No fields found in schema:", schema);
@@ -136,7 +158,6 @@ const App = () => {
       const name = field.name || field.id || `Field${index + 1}`;
       let fieldType = field.type || "Unknown";
 
-      // Map type to human-readable format
       if (fieldType === "text") {
         fieldType = "Text";
       } else if (fieldType === "paragraph") {
@@ -144,7 +165,6 @@ const App = () => {
       } else if (fieldType === "multiple_choice") {
         fieldType = "Dropdown";
       } else {
-        // Capitalize other types (e.g., email, number)
         fieldType = fieldType.charAt(0).toUpperCase() + fieldType.slice(1);
       }
 
@@ -162,7 +182,7 @@ const App = () => {
       });
     });
 
-    console.log("Processed fields:", fields); // Debug log
+    console.log("Processed fields:", fields);
     return fields;
   };
 
@@ -268,6 +288,18 @@ const App = () => {
               displayObjectSize={false}
               displayDataTypes={false}
             />
+          </div>
+        )}
+        {response.questions && response.questions.length > 0 && (
+          <div className="questions-container">
+            <h4>Generated Questions</h4>
+            <ul>
+              {response.questions.map((q, index) => (
+                <li key={index}>
+                  <strong>{q.label}:</strong> {q.question}
+                </li>
+              ))}
+            </ul>
           </div>
         )}
         {response.gemini_url && (

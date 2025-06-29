@@ -19,7 +19,7 @@ app = FastAPI(title="Form Parser Bridge")
 # Enable CORS for React app
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000",],
+    allow_origins=["http://localhost:5173", "http://localhost:3000"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -43,7 +43,7 @@ async def parse_form_endpoint(request: FormRequest):
         request: FormRequest with url and form_type.
     
     Returns:
-        dict: Parsed form schema, Gemini validation, or error message.
+        dict: Parsed form schema, Gemini validation, questions, or error message.
     """
     url = request.url
     form_type = request.form_type
@@ -93,7 +93,7 @@ async def parse_form_endpoint(request: FormRequest):
         # Ensure client cleanup
         if 'client' in locals() and hasattr(client, 'transport') and client.transport:
             try:
-                client.transport.close()
+                await client.transport.close()
                 logger.debug("Closed client transport")
             except Exception as e:
                 logger.warning(f"Error closing client transport: {str(e)}")
@@ -107,7 +107,7 @@ async def parse_html_form_endpoint(request: HTMLRequest):
         request: HTMLRequest with html_input and is_file.
     
     Returns:
-        dict: Parsed form schema, Gemini validation, or error message.
+        dict: Parsed form schema, Gemini validation, questions, or error message.
     """
     html_input = request.html_input
     is_file = request.is_file
@@ -157,7 +157,7 @@ async def parse_html_form_endpoint(request: HTMLRequest):
         # Ensure client cleanup
         if 'client' in locals() and hasattr(client, 'transport') and client.transport:
             try:
-                client.transport.close()
+                await client.transport.close()
                 logger.debug("Closed client transport")
             except Exception as e:
                 logger.warning(f"Error closing client transport: {str(e)}")
