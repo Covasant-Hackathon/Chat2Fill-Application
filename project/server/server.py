@@ -7,6 +7,7 @@ from fastmcp import FastMCP
 import google.generativeai as genai
 from form_parser import FormParser
 from llm_conversation import LLMConversation
+from multilingual_support import MultilingualSupport
 from dotenv import load_dotenv
 
 # Configure logging
@@ -64,12 +65,13 @@ except Exception as e:
     logger.error(f"Failed to initialize Gemini model: {str(e)}")
     raise
 
-# Initialize LLMConversation
+# Initialize LLMConversation and MultilingualSupport
 try:
     llm_conv = LLMConversation()
-    logger.info("LLMConversation initialized")
+    multilingual = MultilingualSupport()
+    logger.info("LLMConversation and MultilingualSupport initialized")
 except Exception as e:
-    logger.error(f"Failed to initialize LLMConversation: {str(e)}")
+    logger.error(f"Failed to initialize LLMConversation or MultilingualSupport: {str(e)}")
     raise
 
 # Initialize FastMCP
@@ -82,18 +84,19 @@ except Exception as e:
 
 # Define MCP tool for URL-based form parsing
 @mcp.tool()
-def parse_form(url: str, form_type: str) -> dict:
+def parse_form(url: str, form_type: str, language: str = "en") -> dict:
     """
     Parse a web form from a given URL and return its schema after validating with Gemini.
     
     Args:
         url (str): URL of the form to parse.
         form_type (str): Type of form ('google', 'typeform', 'microsoft', 'custom').
+        language (str): User-preferred language for translations.
     
     Returns:
-        dict: Parsed form schema, status, Gemini validation message, or error message, and conversational questions.
+        dict: Parsed form schema, status, Gemini validation message, questions, and translated schema.
     """
-    logger.info(f"Received parse_form request: url={url}, form_type={form_type}")
+    logger.info(f"Received parse_form request: url={url}, form_type={form_type}, language={language}")
     try:
         # Validate inputs
         if not url or len(url) > 2000:
@@ -103,6 +106,7 @@ def parse_form(url: str, form_type: str) -> dict:
                 "error": "URL is empty or exceeds maximum length of 2000 characters",
                 "gemini_message": "",
                 "form_schema": {},
+                "translated_form_schema": {},
                 "questions": []
             }
         
@@ -113,6 +117,7 @@ def parse_form(url: str, form_type: str) -> dict:
                 "error": "Invalid form type. Must be one of: google, typeform, microsoft, custom",
                 "gemini_message": "",
                 "form_schema": {},
+                "translated_form_schema": {},
                 "questions": []
             }
 
@@ -137,6 +142,7 @@ def parse_form(url: str, form_type: str) -> dict:
                 "error": "Invalid Gemini response: No text content",
                 "gemini_message": "",
                 "form_schema": {},
+                "translated_form_schema": {},
                 "questions": []
             }
 
@@ -159,6 +165,7 @@ def parse_form(url: str, form_type: str) -> dict:
                 "error": "Failed to parse Gemini response",
                 "gemini_message": gemini_data,
                 "form_schema": {},
+                "translated_form_schema": {},
                 "questions": []
             }
 
@@ -172,6 +179,7 @@ def parse_form(url: str, form_type: str) -> dict:
                 "error": gemini_result.get("message", "Invalid input from Gemini"),
                 "gemini_message": gemini_result.get("message", ""),
                 "form_schema": {},
+                "translated_form_schema": {},
                 "questions": []
             }
 
@@ -184,8 +192,11 @@ def parse_form(url: str, form_type: str) -> dict:
         form_schema = parser.parse_form_from_url(validated_url, validated_form_type)
         logger.info("Form parsed successfully")
 
+        # Translate form schema
+        translated_form_schema = multilingual.translate_form_fields(form_schema, language)
+
         # Generate conversational questions
-        questions = llm_conv.generate_questions(form_schema, context=f"Parsing a {validated_form_type} form from {validated_url}")
+        questions = llm_conv.generate_questions(form_schema, context=f"Parsing a {validated_form_type} form from {validated_url}", language=language)
 
         # Save questions to a file
         timestamp = time.strftime("%Y%m%d-%H%M%S")
@@ -200,6 +211,7 @@ def parse_form(url: str, form_type: str) -> dict:
         return {
             "status": "success",
             "form_schema": form_schema,
+            "translated_form_schema": translated_form_schema,
             "gemini_url": validated_url,
             "gemini_form_type": validated_form_type,
             "gemini_message": gemini_result.get("message", ""),
@@ -213,6 +225,7 @@ def parse_form(url: str, form_type: str) -> dict:
             "error": str(e),
             "gemini_message": gemini_result.get("message", "") if 'gemini_result' in locals() else "",
             "form_schema": {},
+            "translated_form_schema": {},
             "questions": []
         }
     except Exception as e:
@@ -222,23 +235,25 @@ def parse_form(url: str, form_type: str) -> dict:
             "error": f"Server error: {str(e)}",
             "gemini_message": gemini_result.get("message", "") if 'gemini_result' in locals() else "",
             "form_schema": {},
+            "translated_form_schema": {},
             "questions": []
         }
 
 # Define MCP tool for HTML content parsing
 @mcp.tool()
-def parse_html_form(html_input: str, is_file: bool = False) -> dict:
+def parse_html_form(html_input: str, is_file: bool = False, language: str = "en") -> dict:
     """
     Parse a static HTML form from a string or file and return its schema.
     
     Args:
         html_input (str): HTML string or file path to HTML content.
         is_file (bool): If True, treat html_input as a file path; otherwise, treat as HTML string.
+        language (str): User-preferred language for translations.
     
     Returns:
-        dict: Parsed form schema, status, optional Gemini validation message, and conversational questions.
+        dict: Parsed form schema, status, Gemini validation message, questions, and translated schema.
     """
-    logger.info(f"Received parse_html_form request: is_file={is_file}")
+    logger.info(f"Received parse_html_form request: is_file={is_file}, language={language}")
     try:
         # Validate input
         if not html_input:
@@ -248,6 +263,7 @@ def parse_html_form(html_input: str, is_file: bool = False) -> dict:
                 "error": "HTML input cannot be empty",
                 "gemini_message": "",
                 "form_schema": {},
+                "translated_form_schema": {},
                 "questions": []
             }
 
@@ -281,6 +297,7 @@ def parse_html_form(html_input: str, is_file: bool = False) -> dict:
                         "error": gemini_message or "Invalid HTML form structure",
                         "gemini_message": gemini_message,
                         "form_schema": {},
+                        "translated_form_schema": {},
                         "questions": []
                     }
             except json.JSONDecodeError as e:
@@ -296,8 +313,11 @@ def parse_html_form(html_input: str, is_file: bool = False) -> dict:
         form_schema = parser.parse_html_content(html_input, is_file)
         logger.info("HTML parsed successfully")
 
+        # Translate form schema
+        translated_form_schema = multilingual.translate_form_fields(form_schema, language)
+
         # Generate conversational questions
-        questions = llm_conv.generate_questions(form_schema, context="Parsing a static HTML form")
+        questions = llm_conv.generate_questions(form_schema, context="Parsing a static HTML form", language=language)
 
         # Save questions to a file
         timestamp = time.strftime("%Y%m%d-%H%M%S")
@@ -312,6 +332,7 @@ def parse_html_form(html_input: str, is_file: bool = False) -> dict:
         return {
             "status": "success",
             "form_schema": form_schema,
+            "translated_form_schema": translated_form_schema,
             "gemini_message": gemini_message,
             "questions": questions
         }
@@ -323,6 +344,7 @@ def parse_html_form(html_input: str, is_file: bool = False) -> dict:
             "error": str(e),
             "gemini_message": gemini_message if 'gemini_message' in locals() else "",
             "form_schema": {},
+            "translated_form_schema": {},
             "questions": []
         }
     except Exception as e:
@@ -332,6 +354,7 @@ def parse_html_form(html_input: str, is_file: bool = False) -> dict:
             "error": f"Server error: {str(e)}",
             "gemini_message": gemini_message if 'gemini_message' in locals() else "",
             "form_schema": {},
+            "translated_form_schema": {},
             "questions": []
         }
 

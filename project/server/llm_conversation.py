@@ -9,6 +9,7 @@ from langchain_core.runnables.history import RunnableWithMessageHistory
 from langchain_core.chat_history import InMemoryChatMessageHistory
 from langchain_core.messages import HumanMessage, AIMessage
 from dotenv import load_dotenv
+from multilingual_support import MultilingualSupport
 import pytest
 
 # Configure logging
@@ -28,6 +29,7 @@ class LLMConversation:
     def __init__(self):
         self.chat_history = InMemoryChatMessageHistory()
         self.llm = self._initialize_llm()
+        self.multilingual = MultilingualSupport()
         self.prompt_templates = self._define_prompt_templates()
         self.runnable = RunnableWithMessageHistory(
             runnable=self.llm,
@@ -109,16 +111,18 @@ class LLMConversation:
         }
         return templates
 
-    def generate_questions(self, form_schema: Dict[str, Any], context: str = "") -> List[Dict[str, str]]:
+    def generate_questions(self, form_schema: Dict[str, Any], context: str = "", language: str = "en") -> List[Dict[str, str]]:
         """Generate conversational questions for each field in the form schema."""
         questions = []
         try:
-            form_fields = form_schema.get("forms", [{}])[0].get("fields", [])
+            # Translate form schema
+            translated_schema = self.multilingual.translate_form_fields(form_schema, language)
+            form_fields = translated_schema.get("forms", [{}])[0].get("fields", [])
             for field in form_fields:
                 field_type = field.get("type", "text")
-                label = field.get("label", "Untitled Field")
+                label = field.get("translated_label", field.get("label", "Untitled Field"))
                 required = str(field.get("required", False)).lower()
-                options = [opt["text"] for opt in field.get("options", [])] if field.get("options") else []
+                options = [opt["translated_text"] for opt in field.get("translated_options", [])] if field.get("options") else []
 
                 template = self.prompt_templates.get(field_type, self.prompt_templates["fallback"])
                 chain = RunnableSequence(template | self.llm)
@@ -131,16 +135,16 @@ class LLMConversation:
                         "options": options,
                         "context": context
                     }).strip()
-                    # Ensure question is clean (remove any code-like content)
+                    # Ensure question is clean
                     if question.startswith("def ") or "print(" in question:
                         question = f"Can you provide your {label}?"
                     questions.append({
                         "field_id": field.get("id"),
-                        "label": label,
-                        "question": question
+                        "label": field.get("label"),
+                        "question": question,
+                        "translated_question": self.multilingual.translate(question, "en", language) if language != "en" else question
                     })
                     logger.info(f"Generated question for field '{label}': {question}")
-                    # Update conversation history
                     self.chat_history.add_user_message(field_input)
                     self.chat_history.add_ai_message(question)
                 except Exception as e:
@@ -148,10 +152,10 @@ class LLMConversation:
                     fallback_question = f"Can you provide your {label}?"
                     questions.append({
                         "field_id": field.get("id"),
-                        "label": label,
-                        "question": fallback_question
+                        "label": field.get("label"),
+                        "question": fallback_question,
+                        "translated_question": self.multilingual.translate(fallback_question, "en", language) if language != "en" else fallback_question
                     })
-                    # Save fallback question to history
                     self.chat_history.add_user_message(field_input)
                     self.chat_history.add_ai_message(fallback_question)
 
@@ -160,15 +164,17 @@ class LLMConversation:
             logger.error(f"Error processing form schema: {str(e)}")
             return []
 
-    def parse_response(self, user_response: str, field: Dict[str, Any]) -> Dict[str, Any]:
+    def parse_response(self, user_response: str, field: Dict[str, Any], user_language: str = "en") -> Dict[str, Any]:
         """Parse and validate user response based on field type."""
         try:
             field_type = field.get("type", "text")
-            label = field.get("label", "Untitled Field")
+            label = field.get("translated_label", field.get("label", "Untitled Field"))
             validation = field.get("validation", {})
-            response_data = {"field_id": field.get("id"), "value": user_response, "valid": True}
+            # Translate user response to English for validation
+            response_en = self.multilingual.translate_response(user_response, user_language, "en")
+            response_data = {"field_id": field.get("id"), "value": response_en, "valid": True, "original_response": user_response}
 
-            if validation.get("required") and not user_response.strip():
+            if validation.get("required") and not response_en.strip():
                 response_data["valid"] = False
                 response_data["error"] = f"{label} is required."
                 self.chat_history.add_user_message(f"Field: {label}, Response: {user_response}")
@@ -176,16 +182,16 @@ class LLMConversation:
                 return response_data
 
             if field_type in ["multiple_choice", "dropdown"]:
-                options = [opt["text"] for opt in field.get("options", [])]
-                if user_response not in options:
+                options = [opt["translated_text"] for opt in field.get("translated_options", field.get("options", []))]
+                if response_en not in [opt["text"] for opt in field.get("options", [])]:
                     response_data["valid"] = False
                     response_data["error"] = f"Invalid option selected for {label}. Choose from: {', '.join(options)}"
                 self.chat_history.add_user_message(f"Field: {label}, Response: {user_response}")
                 self.chat_history.add_ai_message(f"Validation: {'Valid' if response_data['valid'] else 'Invalid'}")
             elif field_type == "checkbox":
-                options = [opt["text"] for opt in field.get("options", [])]
-                selected = [r.strip() for r in user_response.split(",") if r.strip()]
-                invalid = [s for s in selected if s not in options]
+                options = [opt["translated_text"] for opt in field.get("translated_options", field.get("options", []))]
+                selected = [r.strip() for r in response_en.split(",") if r.strip()]
+                invalid = [s for s in selected if s not in [opt["text"] for opt in field.get("options", [])]]
                 if invalid:
                     response_data["valid"] = False
                     response_data["error"] = f"Invalid options for {label}: {', '.join(invalid)}"
@@ -193,7 +199,7 @@ class LLMConversation:
                 self.chat_history.add_user_message(f"Field: {label}, Response: {user_response}")
                 self.chat_history.add_ai_message(f"Validation: {'Valid' if response_data['valid'] else 'Invalid'}")
             elif field_type == "email":
-                if not "@" in user_response or not "." in user_response:
+                if not "@" in response_en or not "." in response_en:
                     response_data["valid"] = False
                     response_data["error"] = f"Invalid email format for {label}."
                 self.chat_history.add_user_message(f"Field: {label}, Response: {user_response}")
@@ -206,7 +212,8 @@ class LLMConversation:
                 "field_id": field.get("id"),
                 "value": user_response,
                 "valid": False,
-                "error": f"Failed to validate response: {str(e)}"
+                "error": f"Failed to validate response: {str(e)}",
+                "original_response": user_response
             }
             self.chat_history.add_user_message(f"Field: {field.get('label', 'Untitled Field')}, Response: {user_response}")
             self.chat_history.add_ai_message("Validation: Invalid")
@@ -225,7 +232,7 @@ class LLMConversation:
 # Testing Framework
 def test_llm_conversation():
     """Test suite for LLMConversation class."""
-    llm_conv = LLMConversation()  # Use local Ollama model
+    llm_conv = LLMConversation()
 
     # Sample form schema
     sample_schema = {
@@ -247,24 +254,28 @@ def test_llm_conversation():
     }
 
     def test_question_generation():
-        questions = llm_conv.generate_questions(sample_schema, context="Filling out a user profile form")
+        questions = llm_conv.generate_questions(sample_schema, context="Filling out a user profile form", language="hi")
         assert len(questions) == 5, "Should generate questions for all fields"
         assert all(q["question"] for q in questions), "All questions should be non-empty"
+        assert all(q["translated_question"] for q in questions), "All translated questions should be non-empty"
         assert "Full Name" in [q["label"] for q in questions], "Full Name field should be included"
 
     def test_response_parsing():
         field = sample_schema["forms"][0]["fields"][2]  # Color (multiple_choice)
-        response = llm_conv.parse_response("Red", field)
+        field["translated_label"] = "रंग"
+        field["translated_options"] = [{"text": "Red", "translated_text": "लाल"}, {"text": "Blue", "translated_text": "नीला"}, {"text": "Green", "translated_text": "हरा"}]
+        response = llm_conv.parse_response("लाल", field, user_language="hi")
         assert response["valid"], "Valid response should be accepted"
-        assert response["value"] == "Red", "Response value should match input"
+        assert response["value"] == "Red", "Response value should match English option"
+        assert response["original_response"] == "लाल", "Original response should be preserved"
 
-        response = llm_conv.parse_response("Yellow", field)
+        response = llm_conv.parse_response("पीला", field, user_language="hi")
         assert not response["valid"], "Invalid response should be rejected"
         assert "Invalid option" in response["error"], "Error message should indicate invalid option"
 
     def test_context_management():
         llm_conv.clear_context()
-        llm_conv.generate_questions(sample_schema, context="Filling out a user profile form")
+        llm_conv.generate_questions(sample_schema, context="Filling out a user profile form", language="hi")
         context = llm_conv.get_context()
         assert context, "Context should not be empty after question generation"
         llm_conv.clear_context()

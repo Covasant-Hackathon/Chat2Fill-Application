@@ -8,6 +8,7 @@ const App = () => {
   const [url, setUrl] = useState("");
   const [htmlInput, setHtmlInput] = useState("");
   const [isFile, setIsFile] = useState(false);
+  const [language, setLanguage] = useState("en");
   const [chatHistory, setChatHistory] = useState([]);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -43,6 +44,7 @@ const App = () => {
       type: "url",
       url,
       formType,
+      language,
       timestamp: new Date().toISOString(),
     };
     setChatHistory([...chatHistory, { query, response: null }]);
@@ -51,6 +53,7 @@ const App = () => {
       const response = await axios.post("http://localhost:8000/parse_form", {
         url,
         form_type: formType,
+        language,
       });
       console.log("Server response:", response.data);
       setChatHistory((prev) => {
@@ -88,6 +91,7 @@ const App = () => {
       type: "html",
       htmlInput,
       isFile,
+      language,
       timestamp: new Date().toISOString(),
     };
     setChatHistory([...chatHistory, { query, response: null }]);
@@ -98,6 +102,7 @@ const App = () => {
         {
           html_input: htmlInput,
           is_file: isFile,
+          language,
         }
       );
       console.log("Server response:", response.data);
@@ -154,7 +159,8 @@ const App = () => {
         return;
       }
 
-      const label = field.label || field.name || "Unnamed";
+      const label =
+        field.translated_label || field.label || field.name || "Unnamed";
       const name = field.name || field.id || `Field${index + 1}`;
       let fieldType = field.type || "Unknown";
 
@@ -169,7 +175,11 @@ const App = () => {
       }
 
       const required = field.required ? "Yes" : "No";
-      const options = field.options
+      const options = field.translated_options
+        ? field.translated_options
+            .map((opt) => opt.translated_text || opt.text)
+            .join(", ")
+        : field.options
         ? field.options.map((opt) => opt.text).join(", ")
         : "N/A";
 
@@ -196,6 +206,9 @@ const App = () => {
           <p>
             <strong>Form Type:</strong> {query.formType}
           </p>
+          <p>
+            <strong>Language:</strong> {query.language}
+          </p>
         </div>
       );
     }
@@ -208,6 +221,9 @@ const App = () => {
         </p>
         <p>
           <strong>Is File:</strong> {query.isFile ? "Yes" : "No"}
+        </p>
+        <p>
+          <strong>Language:</strong> {query.language}
         </p>
       </div>
     );
@@ -229,7 +245,9 @@ const App = () => {
       );
     }
 
-    const fields = flattenSchema(response.form_schema);
+    const fields = flattenSchema(
+      response.translated_form_schema || response.form_schema
+    );
 
     return (
       <div className="response success">
@@ -282,7 +300,7 @@ const App = () => {
         ) : (
           <div className="json-viewer">
             <JSONViewer
-              src={response.form_schema}
+              src={response.translated_form_schema || response.form_schema}
               theme="monokai"
               collapsed={1}
               displayObjectSize={false}
@@ -296,7 +314,8 @@ const App = () => {
             <ul>
               {response.questions.map((q, index) => (
                 <li key={index}>
-                  <strong>{q.label}:</strong> {q.question}
+                  <strong>{q.label}:</strong>{" "}
+                  {q.translated_question || q.question}
                 </li>
               ))}
             </ul>
@@ -361,6 +380,22 @@ const App = () => {
             <button className="clear-btn" onClick={clearChat}>
               Clear Chat
             </button>
+          </div>
+
+          <div className="form-group">
+            <label>
+              Language:
+              <select
+                value={language}
+                onChange={(e) => setLanguage(e.target.value)}
+              >
+                <option value="en">English</option>
+                <option value="hi">Hindi</option>
+                <option value="te">Telugu</option>
+                <option value="ta">Tamil</option>
+                <option value="bn">Bengali</option>
+              </select>
+            </label>
           </div>
 
           {mode === "url" ? (

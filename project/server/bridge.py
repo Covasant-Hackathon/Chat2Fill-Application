@@ -29,10 +29,12 @@ app.add_middleware(
 class FormRequest(BaseModel):
     url: str
     form_type: str
+    language: str = "en"
 
 class HTMLRequest(BaseModel):
     html_input: str
     is_file: bool = False
+    language: str = "en"
 
 @app.post("/parse_form")
 async def parse_form_endpoint(request: FormRequest):
@@ -40,14 +42,15 @@ async def parse_form_endpoint(request: FormRequest):
     Receive HTTP POST request from React app to parse a form from a URL via FastMCP server.
     
     Args:
-        request: FormRequest with url and form_type.
+        request: FormRequest with url, form_type, and language.
     
     Returns:
-        dict: Parsed form schema, Gemini validation, questions, or error message.
+        dict: Parsed form schema, Gemini validation, questions, and translated schema.
     """
     url = request.url
     form_type = request.form_type
-    logger.info(f"Received parse_form request: url={url}, form_type={form_type}")
+    language = request.language
+    logger.info(f"Received parse_form request: url={url}, form_type={form_type}, language={language}")
     try:
         # Initialize FastMCP client to communicate with server.py
         client = Client("server.py")
@@ -55,8 +58,8 @@ async def parse_form_endpoint(request: FormRequest):
 
         # Call the parse_form tool
         async with client:
-            logger.debug(f"Calling tool parse_form with url: {url}, form_type: {form_type}")
-            response = await client.call_tool("parse_form", {"url": url, "form_type": form_type})
+            logger.debug(f"Calling tool parse_form with url: {url}, form_type: {form_type}, language: {language}")
+            response = await client.call_tool("parse_form", {"url": url, "form_type": form_type, "language": language})
             logger.info("Received response from server")
 
             # Handle response
@@ -104,14 +107,15 @@ async def parse_html_form_endpoint(request: HTMLRequest):
     Receive HTTP POST request from React app to parse a static HTML form via FastMCP server.
     
     Args:
-        request: HTMLRequest with html_input and is_file.
+        request: HTMLRequest with html_input, is_file, and language.
     
     Returns:
-        dict: Parsed form schema, Gemini validation, questions, or error message.
+        dict: Parsed form schema, Gemini validation, questions, and translated schema.
     """
     html_input = request.html_input
     is_file = request.is_file
-    logger.info(f"Received parse_html_form request: is_file={is_file}")
+    language = request.language
+    logger.info(f"Received parse_html_form request: is_file={is_file}, language={language}")
     try:
         # Initialize FastMCP client to communicate with server.py
         client = Client("server.py")
@@ -119,8 +123,8 @@ async def parse_html_form_endpoint(request: HTMLRequest):
 
         # Call the parse_html_form tool
         async with client:
-            logger.debug(f"Calling tool parse_html_form with html_input: {html_input[:50]}..., is_file: {is_file}")
-            response = await client.call_tool("parse_html_form", {"html_input": html_input, "is_file": is_file})
+            logger.debug(f"Calling tool parse_html_form with html_input: {html_input[:50]}..., is_file: {is_file}, language: {language}")
+            response = await client.call_tool("parse_html_form", {"html_input": html_input, "is_file": is_file, "language": language})
             logger.info("Received response from server")
 
             # Handle response
