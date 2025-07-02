@@ -25,7 +25,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Request models for FastAPI
+# Request models
 class FormRequest(BaseModel):
     url: str
     form_type: str
@@ -36,135 +36,122 @@ class HTMLRequest(BaseModel):
     is_file: bool = False
     language: str = "en"
 
+class AutofillRequest(BaseModel):
+    url: str
+    form_schema: dict
+    responses: list
+    language: str = "en"
+
+# Existing parse_form endpoint
 @app.post("/parse_form")
 async def parse_form_endpoint(request: FormRequest):
-    """
-    Receive HTTP POST request from React app to parse a form from a URL via FastMCP server.
-    
-    Args:
-        request: FormRequest with url, form_type, and language.
-    
-    Returns:
-        dict: Parsed form schema, Gemini validation, questions, and translated schema.
-    """
     url = request.url
     form_type = request.form_type
     language = request.language
     logger.info(f"Received parse_form request: url={url}, form_type={form_type}, language={language}")
     try:
-        # Initialize FastMCP client to communicate with server.py
         client = Client("server.py")
-        logger.info("Connected to FastMCP server via stdio")
-
-        # Call the parse_form tool
         async with client:
-            logger.debug(f"Calling tool parse_form with url: {url}, form_type: {form_type}, language: {language}")
             response = await client.call_tool("parse_form", {"url": url, "form_type": form_type, "language": language})
-            logger.info("Received response from server")
-
-            # Handle response
             if isinstance(response, list):
                 if len(response) == 0:
                     raise ValueError("Empty response list from server")
                 response = response[0]
-                logger.info("Extracted first element from response list")
-
-            # Handle TextContent-like object
             if hasattr(response, 'text'):
-                try:
-                    response_text = response.text.strip()
-                    if response_text.startswith("```json"):
-                        response_text = response_text[7:].strip()
-                    if response_text.endswith("```"):
-                        response_text = response_text[:-3].strip()
-                    response = json.loads(response_text)
-                    logger.info("Parsed TextContent text to dictionary")
-                except json.JSONDecodeError as e:
-                    logger.error(f"Failed to parse TextContent text: {str(e)}")
-                    raise HTTPException(status_code=500, detail=f"Failed to parse response: {str(e)}")
-
-            # Ensure response is a dictionary
+                response_text = response.text.strip()
+                if response_text.startswith("```json"):
+                    response_text = response_text[7:].strip()
+                if response_text.endswith("```"):
+                    response_text = response_text[:-3].strip()
+                response = json.loads(response_text)
             if not isinstance(response, dict):
-                logger.error(f"Unexpected response type: {type(response)}")
                 raise HTTPException(status_code=500, detail=f"Unexpected response type: {type(response)}")
-
             return response
     except Exception as e:
         logger.error(f"Error processing parse_form request: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
     finally:
-        # Ensure client cleanup
         if 'client' in locals() and hasattr(client, 'transport') and client.transport:
-            try:
-                await client.transport.close()
-                logger.debug("Closed client transport")
-            except Exception as e:
-                logger.warning(f"Error closing client transport: {str(e)}")
+            await client.transport.close()
 
+# Existing parse_html_form endpoint
 @app.post("/parse_html_form")
 async def parse_html_form_endpoint(request: HTMLRequest):
-    """
-    Receive HTTP POST request from React app to parse a static HTML form via FastMCP server.
-    
-    Args:
-        request: HTMLRequest with html_input, is_file, and language.
-    
-    Returns:
-        dict: Parsed form schema, Gemini validation, questions, and translated schema.
-    """
     html_input = request.html_input
     is_file = request.is_file
     language = request.language
     logger.info(f"Received parse_html_form request: is_file={is_file}, language={language}")
     try:
-        # Initialize FastMCP client to communicate with server.py
         client = Client("server.py")
-        logger.info("Connected to FastMCP server via stdio")
-
-        # Call the parse_html_form tool
         async with client:
-            logger.debug(f"Calling tool parse_html_form with html_input: {html_input[:50]}..., is_file: {is_file}, language: {language}")
             response = await client.call_tool("parse_html_form", {"html_input": html_input, "is_file": is_file, "language": language})
-            logger.info("Received response from server")
-
-            # Handle response
             if isinstance(response, list):
                 if len(response) == 0:
                     raise ValueError("Empty response list from server")
                 response = response[0]
-                logger.info("Extracted first element from response list")
-
-            # Handle TextContent-like object
             if hasattr(response, 'text'):
-                try:
-                    response_text = response.text.strip()
-                    if response_text.startswith("```json"):
-                        response_text = response_text[7:].strip()
-                    if response_text.endswith("```"):
-                        response_text = response_text[:-3].strip()
-                    response = json.loads(response_text)
-                    logger.info("Parsed TextContent text to dictionary")
-                except json.JSONDecodeError as e:
-                    logger.error(f"Failed to parse TextContent text: {str(e)}")
-                    raise HTTPException(status_code=500, detail=f"Failed to parse response: {str(e)}")
-
-            # Ensure response is a dictionary
+                response_text = response.text.strip()
+                if response_text.startswith("```json"):
+                    response_text = response_text[7:].strip()
+                if response_text.endswith("```"):
+                    response_text = response_text[:-3].strip()
+                response = json.loads(response_text)
             if not isinstance(response, dict):
-                logger.error(f"Unexpected response type: {type(response)}")
                 raise HTTPException(status_code=500, detail=f"Unexpected response type: {type(response)}")
-
             return response
     except Exception as e:
         logger.error(f"Error processing parse_html_form request: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
     finally:
-        # Ensure client cleanup
         if 'client' in locals() and hasattr(client, 'transport') and client.transport:
-            try:
-                await client.transport.close()
-                logger.debug("Closed client transport")
-            except Exception as e:
-                logger.warning(f"Error closing client transport: {str(e)}")
+            await client.transport.close()
+
+# New autofill_form endpoint
+@app.post("/autofill_form")
+async def autofill_form_endpoint(request: AutofillRequest):
+    """
+    Receive HTTP POST request to autofill a form via FastMCP server.
+    
+    Args:
+        request: AutofillRequest with url, form_schema, responses, and language.
+    
+    Returns:
+        dict: Autofill status, filled fields, errors, screenshots, and logs.
+    """
+    url = request.url
+    form_schema = request.form_schema
+    responses = request.responses
+    language = request.language
+    logger.info(f"Received autofill_form request: url={url}, language={language}")
+    try:
+        client = Client("server.py")
+        async with client:
+            response = await client.call_tool("autofill_form", {
+                "url": url,
+                "form_schema": form_schema,
+                "responses": responses,
+                "language": language
+            })
+            if isinstance(response, list):
+                if len(response) == 0:
+                    raise ValueError("Empty response list from server")
+                response = response[0]
+            if hasattr(response, 'text'):
+                response_text = response.text.strip()
+                if response_text.startswith("```json"):
+                    response_text = response_text[7:].strip()
+                if response_text.endswith("```"):
+                    response_text = response_text[:-3].strip()
+                response = json.loads(response_text)
+            if not isinstance(response, dict):
+                raise HTTPException(status_code=500, detail=f"Unexpected response type: {type(response)}")
+            return response
+    except Exception as e:
+        logger.error(f"Error processing autofill_form request: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
+    finally:
+        if 'client' in locals() and hasattr(client, 'transport') and client.transport:
+            await client.transport.close()
 
 if __name__ == "__main__":
     import uvicorn

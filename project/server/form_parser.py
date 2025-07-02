@@ -1,29 +1,30 @@
+import os
 import json
 import logging
 import sys
-import os
 import platform
 import time
-import requests
 import threading
+import asyncio
 from uuid import uuid4
 from typing import Dict, List, Any, Optional
+from playwright.async_api import async_playwright, Playwright, BrowserContext, Page
+from pathlib import Path
+from dotenv import load_dotenv
+import re
+import requests
 from bs4 import BeautifulSoup
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException, NoSuchElementException
-from webdriver_manager.chrome import ChromeDriverManager
 
-# Configure logging with timestamp
+# Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+# Load environment variables
+load_dotenv()
+CHROME_USER_DATA_DIR = os.environ.get("CHROME_USER_DATA_DIR", "")
 
 # Directory for debug files
 DEBUG_DIR = "debug_html"
@@ -39,110 +40,127 @@ def cleanup_debug_files():
                 file_path = os.path.join(DEBUG_DIR, filename)
                 if os.path.isfile(file_path) and filename.startswith("debug_") and filename.endswith(".html"):
                     file_age = now - os.path.getmtime(file_path)
-                    if file_age > 24 * 3600:  # 24 hours in seconds
+                    if file_age > 24 * 3600:
                         os.remove(file_path)
                         logger.info(f"Deleted old debug file: {file_path}")
-            time.sleep(3600)  # Check every hour
+            time.sleep(3600)
         except Exception as e:
             logger.error(f"Error during debug file cleanup: {str(e)}")
             time.sleep(3600)
 
-# Start cleanup thread
 cleanup_thread = threading.Thread(target=cleanup_debug_files, daemon=True)
 cleanup_thread.start()
 
-def get_default_chrome_paths() -> tuple[str, str, str]:
-    """
-    Detect default Chrome profile and binary paths based on the operating system.
-    
-    Returns:
-        Tuple of (chrome_profile_path, chrome_profile_name, chrome_binary_path)
-    """
+def get_default_chrome_paths() -> tuple[str, str]:
+    """Detect default Chrome user data directory based on the operating system."""
     system = platform.system()
     username = os.getlogin() if system != "Darwin" else os.path.expanduser("~").split("/")[-1]
     
     profile_path = ""
-    profile_name = "Default"
-    binary_path = ""
-    
     if system == "Windows":
         profile_path = f"C:\\Users\\{username}\\AppData\\Local\\Google\\Chrome\\User Data"
-        binary_path = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
-    elif system == "Darwin":  # macOS
+    elif system == "Darwin":
         profile_path = f"/Users/{username}/Library/Application Support/Google/Chrome"
-        binary_path = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
     elif system == "Linux":
         profile_path = f"/home/{username}/.config/google-chrome"
-        binary_path = "/usr/bin/google-chrome"
     
-    return profile_path, profile_name, binary_path
+    return profile_path, "Default"
 
-def load_config() -> tuple[str, str, str]:
-    """
-    Load Chrome profile and binary settings from config.json if available.
-    
-    Returns:
-        Tuple of (chrome_profile_path, chrome_profile_name, chrome_binary_path)
-    """
+def load_config() -> tuple[str, str]:
+    """Load Chrome profile settings from config.json or use defaults."""
     config_file = "config.json"
-    default_path, default_name, default_binary = get_default_chrome_paths()
+    default_path, default_name = get_default_chrome_paths()
     
+    env_profile_path = CHROME_USER_DATA_DIR
+    if env_profile_path and os.path.exists(env_profile_path):
+        logger.info(f"Using CHROME_USER_DATA_DIR from .env: {env_profile_path}")
+        return env_profile_path, "Default"
+
     if os.path.exists(config_file):
         try:
             with open(config_file, 'r', encoding='utf-8') as f:
                 config = json.load(f)
                 path = config.get("chrome_profile_path", default_path)
                 name = config.get("chrome_profile_name", default_name)
-                binary = config.get("chrome_binary_path", default_binary)
-                if os.path.exists(path) and os.path.exists(binary):
-                    return path, name, binary
-                logger.warning(f"Invalid paths in config.json: profile={path}, binary={binary}. Using defaults.")
+                if os.path.exists(path):
+                    logger.info(f"Using profile path from config.json: {path}")
+                    return path, name
+                logger.warning(f"Invalid profile path in config.json: {path}. Using defaults.")
         except Exception as e:
             logger.warning(f"Error reading config.json: {str(e)}. Using defaults.")
     
-    return default_path, default_name, default_binary
+    logger.info(f"Using default profile path: {default_path}")
+    return default_path, default_name
 
 class FormParser:
-    """A parser for extracting form structure from HTML, Google Forms, Typeform, Microsoft Forms, and custom web forms."""
-    
+    """A parser for extracting form structure using Playwright."""
+
     def __init__(self, use_profile: bool = False, debug_mode: bool = False):
         self.supported_input_types = {
             'text', 'number', 'email', 'date', 'tel', 'url', 'password',
             'radio', 'checkbox', 'select', 'textarea', 'file'
         }
-        self.driver = None
+        self.playwright: Optional[Playwright] = None
+        self.context: Optional[BrowserContext] = None
+        self.page: Optional[Page] = None
         self.debug_mode = debug_mode
-        self.chrome_profile_path, self.chrome_profile_name, self.chrome_binary_path = load_config()
+        self.chrome_profile_path, self.chrome_profile_name = load_config() if use_profile else ("", "Default")
         if use_profile and not os.path.exists(self.chrome_profile_path):
-            logger.warning(f"Chrome profile path {self.chrome_profile_path} not found.")
+            logger.warning(f"Chrome profile path {self.chrome_profile_path} not found. Falling back to no profile.")
             self.chrome_profile_path = ""
-            self.chrome_profile_name = ""
-        if not os.path.exists(self.chrome_binary_path):
-            logger.warning(f"Chrome binary path {self.chrome_binary_path} not found. Selenium may fail.")
-            self.chrome_binary_path = ""
 
     def save_debug_html(self, html_content: str, filename: str = "debug.html"):
         """Save the page HTML for debugging."""
         if self.debug_mode:
             file_path = os.path.join(DEBUG_DIR, filename)
-            with open(file_path, "w", encoding='utf-8') as f:
-                f.write(html_content)
-            logger.info(f"Debug HTML saved to {file_path}")
+            try:
+                with open(file_path, "w", encoding='utf-8') as f:
+                    f.write(html_content)
+                logger.info(f"Debug HTML saved to {file_path}")
+            except Exception as e:
+                logger.error(f"Error saving debug HTML to {file_path}: {str(e)}")
 
-    def parse_html_content(self, html_input: str, is_file: bool = False) -> Dict[str, Any]:
-        """
-        Parse static HTML content from a string or file.
-        
-        Args:
-            html_input: HTML string or file path to HTML content
-            is_file: If True, treat html_input as a file path; otherwise, treat as HTML string
-            
-        Returns:
-            Dictionary containing parsed form metadata
-            
-        Raises:
-            ValueError: If parsing fails or file is invalid
-        """
+    async def initialize(self):
+        """Initialize Playwright and browser context."""
+        try:
+            logger.info(f"Initializing Playwright with profile: {self.chrome_profile_path or 'no profile'}")
+            self.playwright = await async_playwright().start()
+            if self.chrome_profile_path:
+                try:
+                    self.context = await self.playwright.chromium.launch_persistent_context(
+                        user_data_dir=Path(self.chrome_profile_path),
+                        channel="chrome",
+                        headless=False,
+                        args=["--disable-extensions", "--no-sandbox"],
+                        viewport={"width": 1280, "height": 720}
+                    )
+                    logger.info(f"Using persistent context with profile: {self.chrome_profile_path}")
+                except Exception as e:
+                    logger.warning(f"Failed to use profile {self.chrome_profile_path}: {str(e)}. Falling back to new context.")
+                    browser = await self.playwright.chromium.launch(headless=False, channel="chrome")
+                    self.context = await browser.new_context(viewport={"width": 1280, "height": 720})
+            else:
+                browser = await self.playwright.chromium.launch(headless=False, channel="chrome")
+                self.context = await browser.new_context(viewport={"width": 1280, "height": 720})
+            self.page = await self.context.new_page()
+            logger.info("Playwright initialized successfully")
+        except Exception as e:
+            logger.error(f"Failed to initialize Playwright: {str(e)}")
+            raise
+
+    async def close(self):
+        """Close Playwright context and browser."""
+        try:
+            if self.context:
+                await self.context.close()
+            if self.playwright:
+                await self.playwright.stop()
+            logger.info("Playwright context closed")
+        except Exception as e:
+            logger.error(f"Error closing Playwright: {str(e)}")
+
+    async def parse_html_content(self, html_input: str, is_file: bool = False) -> Dict[str, Any]:
+        """Parse static HTML content from a string or file."""
         try:
             html_content = ""
             if is_file:
@@ -158,26 +176,14 @@ class FormParser:
             result = self.parse_html(html_content)
             self.save_debug_html(html_content, f"debug_html_{str(uuid4())[:8]}.html")
             return result
-
         except Exception as e:
             logger.error(f"Error parsing HTML content: {str(e)}")
             raise ValueError(f"Failed to parse HTML content: {str(e)}")
 
-    def parse_form_from_url(self, url: str, form_type: str) -> Dict[str, Any]:
-        """
-        Parse a form from a URL, delegating to the appropriate parser based on form type.
-        
-        Args:
-            url: URL of the form
-            form_type: Type of form ('google', 'typeform', 'microsoft', 'custom')
-            
-        Returns:
-            Dictionary containing parsed form metadata
-            
-        Raises:
-            ValueError: If parsing fails
-        """
+    async def parse_form_from_url(self, url: str, form_type: str) -> Dict[str, Any]:
+        """Parse a form from a URL using Playwright."""
         try:
+            await self.initialize()
             # Try static fetching for custom forms
             if form_type == 'custom':
                 try:
@@ -188,138 +194,152 @@ class FormParser:
                     if soup.find('form'):
                         return self.parse_html(html_content)
                 except requests.RequestException as e:
-                    logger.info(f"Static fetch failed for custom form: {e}. Falling back to Selenium.")
+                    logger.info(f"Static fetch failed for custom form: {e}. Falling back to Playwright.")
 
-            # Initialize Selenium driver
-            service = Service(ChromeDriverManager().install())
-            options = Options()
-            options.add_argument("--disable-extensions")
-            if self.chrome_binary_path:
-                options.binary_location = self.chrome_binary_path
-            if self.chrome_profile_path and form_type == "microsoft":
-                options.add_argument(f"--user-data-dir={self.chrome_profile_path}")
-                options.add_argument(f"--profile-directory={self.chrome_profile_name}")
-            self.driver = webdriver.Chrome(service=service, options=options)
-            logger.info(f"Initialized WebDriver with binary: {self.chrome_binary_path}")
-            self.driver.get(url)
-
-            # Check for authentication redirect
-            if "login" in self.driver.current_url.lower() and form_type == "microsoft":
+            # Navigate to URL
+            await self.page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            if "login" in self.page.url.lower() and form_type == "microsoft":
                 raise ValueError("Authentication required. Ensure you're logged into Microsoft in Chrome or provide a public form URL.")
 
-            # Save debug HTML
-            self.save_debug_html(self.driver.page_source, f"debug_{form_type}.html")
+            # Wait for form elements with increased timeout
+            await self.page.wait_for_selector("form, input, select, textarea, div[role='radiogroup']", timeout=30000)
+            await self.page.wait_for_load_state("networkidle", timeout=20000)
+
+            html_content = await self.page.content()
+            self.save_debug_html(html_content, f"debug_{form_type}_{str(uuid4())[:8]}.html")
 
             # Delegate to appropriate parser
             if form_type == 'google':
-                return self.parse_google_form(url)
+                return await self.parse_google_form(url)
             elif form_type == 'typeform':
-                return self.parse_typeform(url)
+                return await self.parse_typeform(url)
             elif form_type == 'microsoft':
-                return self.parse_microsoft_form(url)
+                return await self.parse_microsoft_form(url)
             elif form_type == 'custom':
-                return self.parse_custom_form(url)
+                return await self.parse_custom_form(url)
             else:
                 raise ValueError("Invalid form type")
 
-        except TimeoutException as e:
-            logger.error(f"Timeout while loading form at {url}: {str(e)}")
-            raise ValueError(f"Failed to load form elements. The page may be slow or inaccessible.")
         except Exception as e:
             logger.error(f"Error parsing form from URL {url}: {str(e)}")
             raise ValueError(f"Failed to parse form: {str(e)}")
-        
         finally:
-            if self.driver:
-                self.driver.quit()
+            await self.close()
 
     def _create_soup(self, html_content: str) -> BeautifulSoup:
-        """Create a BeautifulSoup object with lxml parser or fallback to html.parser."""
+        """Create a BeautifulSoup object with lxml parser or fallback."""
         try:
             return BeautifulSoup(html_content, 'lxml')
         except Exception as e:
             logger.warning(f"Failed to use lxml parser: {str(e)}. Falling back to html.parser.")
             return BeautifulSoup(html_content, 'html.parser')
 
-    def parse_google_form(self, url: str) -> Dict[str, Any]:
+    async def parse_google_form(self, url: str) -> Dict[str, Any]:
         try:
-            wait = WebDriverWait(self.driver, 30)
-            for _ in range(3):
-                self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-                time.sleep(2)
-            question_blocks = wait.until(EC.presence_of_all_elements_located((By.CSS_SELECTOR, 'div[role="listitem"]')))
-            logger.info(f"Found {len(question_blocks)} question blocks")
+            # Scroll to load all questions
+            for _ in range(5):
+                await self.page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                await asyncio.sleep(3)
 
+            # Get form title
             form_title = "Untitled Google Form"
             try:
-                form_title_elem = self.driver.find_element(By.CSS_SELECTOR, 'div[jsname="r4nke"]')
-                if form_title_elem:
-                    form_title = form_title_elem.text.strip()
+                title_elem = await self.page.query_selector('div[jsname="r4nke"]')
+                if title_elem:
+                    form_title = await title_elem.inner_text()
+                    form_title = form_title.strip()
             except:
                 pass
+
+            # Get question blocks
+            question_blocks = await self.page.query_selector_all('div[role="listitem"]')
+            logger.info(f"Found {len(question_blocks)} question blocks")
 
             fields_schema = []
             for idx, block in enumerate(question_blocks, 1):
                 try:
-                    label = block.text.strip().split("\n")[0] or f"Untitled Question {idx}"
+                    label_elem = await block.query_selector('span.M7eMe')
+                    label = (await label_elem.inner_text()).strip().split("\n")[0] or f"Untitled Question {idx}" if label_elem else f"Untitled Question {idx}"
                     field_type = "text"
                     is_required = False
 
-                    if block.find_elements(By.CSS_SELECTOR, 'input[type="text"], input[type="email"], input[type="tel"], input[type="number"]'):
+                    # Improved field type detection
+                    if await block.query_selector('div[role="radiogroup"]'):
+                        field_type = "multiple_choice"  # Prioritize radiogroup for Google Forms dropdowns
+                    elif await block.query_selector('input[type="text"], input[type="email"], input[type="tel"], input[type="number"], input[type="date"]'):
                         field_type = "text"
-                    elif block.find_elements(By.TAG_NAME, "textarea"):
+                    elif await block.query_selector("textarea"):
                         field_type = "paragraph"
-                    elif block.find_elements(By.CSS_SELECTOR, 'div[role="radio"], input[type="radio"]'):
-                        field_type = "multiple_choice"
-                    elif block.find_elements(By.CSS_SELECTOR, 'div[role="checkbox"], input[type="checkbox"]'):
+                    elif await block.query_selector('input[type="checkbox"], div[role="checkbox"]'):
                         field_type = "checkbox"
-                    elif block.find_elements(By.CSS_SELECTOR, 'div[role="listbox"], select'):
+                    elif await block.query_selector('select, div[role="listbox"], div[data-type="dropdown"]'):
                         field_type = "dropdown"
 
+                    # Check if required
                     try:
-                        block.find_element(By.CSS_SELECTOR, 'span[aria-label="Required question"], span:contains("*")')
-                        is_required = True
+                        if await block.query_selector('span[aria-label="Required question"], span:contains("*"), div[aria-required="true"]'):
+                            is_required = True
                     except:
                         is_required = False
 
                     field = {
                         "id": str(uuid4()),
-                        "name": label.lower().replace(" ", "_"),
+                        "name": label.lower().replace(" ", "_").replace("/", "_").replace(".", ""),
                         "type": field_type,
                         "label": label,
                         "required": is_required,
                         "validation": {"required": is_required} if is_required else {}
                     }
 
+                    # Enhanced option extraction
                     if field_type in ["multiple_choice", "dropdown", "checkbox"]:
                         option_selectors = [
-                            'div[role="presentation"] span',
-                            'div[role="radio"] span',
-                            'div[role="option"] span',
-                            'label span',
-                            'div.jNTOo span'
+                            'div[role="radio"]',  # Primary for radiogroup-based dropdowns
+                            'div[role="option"]',
+                            'div.ss-choice-item',
+                            'select option',
+                            'label span.aDTYNe',
+                            'div.nWQGrd span.aDTYNe',  # Specific to Google Forms options
+                            'div[role="presentation"] div:not(:has(span:contains("*")))'
                         ]
                         options = []
                         for selector in option_selectors:
                             try:
-                                option_elements = block.find_elements(By.CSS_SELECTOR, selector)
-                                options = [opt.text.strip() for opt in option_elements if opt.text.strip() and opt.text.strip() != label]
+                                option_elements = await block.query_selector_all(selector)
+                                for opt in option_elements:
+                                    opt_text = (await opt.inner_text()).strip()
+                                    opt_value = await opt.evaluate('(el) => el.getAttribute("data-value")') or opt_text
+                                    if opt_text and opt_text != label and opt_text not in options and opt_text != "Other:" and opt_value != "__other_option__":
+                                        options.append(opt_value)
                                 if options:
                                     break
-                            except:
+                            except Exception as e:
+                                logger.debug(f"Option selector {selector} failed for {label}: {e}")
                                 continue
                         if options:
-                            field["options"] = [{"value": opt, "text": opt, "selected": False, "disabled": False} for opt in set(options)]
-                            logger.info(f"Question {idx}: Found {len(options)} options: {options}")
+                            field["options"] = [
+                                {"value": opt, "text": opt, "selected": False, "disabled": False}
+                                for opt in sorted(set(options))
+                            ]
+                            logger.info(f"Question {idx} ({label}): Found {len(options)} options: {options}")
                         else:
-                            logger.warning(f"Question {idx}: No options found for {field_type}")
+                            logger.warning(f"Question {idx} ({label}): No options found for {field_type}")
+
+                        # Handle "Other" option
+                        if await block.query_selector('div[role="radio"][data-value="__other_option__"]'):
+                            field["options"].append({
+                                "value": "Other",
+                                "text": "Other",
+                                "selected": False,
+                                "disabled": False
+                            })
+                            logger.info(f"Question {idx} ({label}): Added 'Other' option")
 
                     fields_schema.append(field)
 
                 except Exception as e:
-                    logger.warning(f"Google Form Question {idx}: Error: {e}")
+                    logger.warning(f"Google Form Question {idx} ({label}): Error: {e}")
 
-            self.save_debug_html(self.driver.page_source, f"debug_google_form_{str(uuid4())[:8]}.html")
             return {
                 "forms": [{
                     "id": str(uuid4()),
@@ -331,46 +351,41 @@ class FormParser:
                 }]
             }
 
-        except TimeoutException as e:
-            logger.error(f"Timeout while parsing Google Form: {str(e)}")
-            raise ValueError("Failed to load Google Form elements. Ensure the URL is valid and accessible. Debug HTML saved.")
         except Exception as e:
             logger.error(f"Error parsing Google Form: {str(e)}")
             raise ValueError(f"Failed to parse Google Form: {str(e)}")
 
-    def parse_typeform(self, url: str) -> Dict[str, Any]:
+    async def parse_typeform(self, url: str) -> Dict[str, Any]:
         try:
-            wait = WebDriverWait(self.driver, 30)
-            question_blocks = wait.until(EC.presence_of_all_elements_located((By.CSS_SELECTOR, '[data-qa="question"]')))
-            
+            question_blocks = await self.page.query_selector_all('[data-qa="question"]')
             form_title = "Untitled Typeform"
             try:
-                title_elem = self.driver.find_element(By.CSS_SELECTOR, 'h1')
+                title_elem = await self.page.query_selector('h1')
                 if title_elem:
-                    form_title = title_elem.text.strip()
+                    form_title = (await title_elem.inner_text()).strip()
             except:
                 pass
 
             fields_schema = []
             for idx, block in enumerate(question_blocks, 1):
                 try:
-                    label = block.text.strip().split("\n")[0] or f"Untitled Question {idx}"
+                    label = (await block.inner_text()).strip().split("\n")[0] or f"Untitled Question {idx}"
                     field_type = "text"
                     is_required = False
 
-                    if block.find_elements(By.TAG_NAME, "input"):
+                    if await block.query_selector("input"):
                         field_type = "text"
-                    elif block.find_elements(By.TAG_NAME, "textarea"):
+                    elif await block.query_selector("textarea"):
                         field_type = "paragraph"
-                    elif block.find_elements(By.CSS_SELECTOR, 'input[type="radio"]'):
+                    elif await block.query_selector('input[type="radio"], div[role="radio"]'):
                         field_type = "multiple_choice"
-                    elif block.find_elements(By.CSS_SELECTOR, 'input[type="checkbox"]'):
+                    elif await block.query_selector('input[type="checkbox"], div[role="checkbox"]'):
                         field_type = "checkbox"
-                    elif block.find_elements(By.TAG_NAME, "select"):
+                    elif await block.query_selector("select, div[role='listbox']"):
                         field_type = "dropdown"
 
                     try:
-                        if block.find_element(By.CSS_SELECTOR, '[aria-required="true"]') or "*" in block.text:
+                        if await block.query_selector('[aria-required="true"]') or "*" in (await block.inner_text()):
                             is_required = True
                     except:
                         is_required = False
@@ -385,17 +400,16 @@ class FormParser:
                     }
 
                     if field_type in ["multiple_choice", "dropdown", "checkbox"]:
-                        option_elements = block.find_elements(By.CSS_SELECTOR, 'label, option')
-                        options = [opt.text.strip() for opt in option_elements if opt.text.strip()]
+                        option_elements = await block.query_selector_all('label, option, div[role="radio"], div[role="option"]')
+                        options = [await opt.inner_text() for opt in option_elements if (await opt.inner_text()).strip()]
                         if options:
-                            field["options"] = [{"value": opt, "text": opt, "selected": False, "disabled": False} for opt in set(options)]
+                            field["options"] = [{"value": opt, "text": opt, "selected": False, "disabled": False} for opt in sorted(set(options))]
 
                     fields_schema.append(field)
 
                 except Exception as e:
                     logger.warning(f"Typeform Question {idx}: Error: {e}")
 
-            self.save_debug_html(self.driver.page_source, f"debug_typeform_{str(uuid4())[:8]}.html")
             return {
                 "forms": [{
                     "id": str(uuid4()),
@@ -407,46 +421,41 @@ class FormParser:
                 }]
             }
 
-        except TimeoutException as e:
-            logger.error(f"Timeout while parsing Typeform: {str(e)}")
-            raise ValueError("Failed to load Typeform elements. Ensure the URL is valid and accessible. Debug HTML saved.")
         except Exception as e:
             logger.error(f"Error parsing Typeform: {str(e)}")
             raise ValueError(f"Failed to parse Typeform: {str(e)}")
 
-    def parse_microsoft_form(self, url: str) -> Dict[str, Any]:
+    async def parse_microsoft_form(self, url: str) -> Dict[str, Any]:
         try:
-            wait = WebDriverWait(self.driver, 30)
-            question_blocks = wait.until(EC.presence_of_all_elements_located((By.CSS_SELECTOR, 'div[data-automation-id="questionItem"]')))
-            
+            question_blocks = await self.page.query_selector_all('div[data-automation-id="questionItem"]')
             form_title = "Untitled Microsoft Form"
             try:
-                title_elem = self.driver.find_element(By.CSS_SELECTOR, 'div[data-automation-id="formTitle"]')
+                title_elem = await self.page.query_selector('div[data-automation-id="formTitle"]')
                 if title_elem:
-                    form_title = title_elem.text.strip()
+                    form_title = (await title_elem.inner_text()).strip()
             except:
                 pass
 
             fields_schema = []
             for idx, block in enumerate(question_blocks, 1):
                 try:
-                    label = block.text.strip().split("\n")[0] or f"Untitled Question {idx}"
+                    label = (await block.inner_text()).strip().split("\n")[0] or f"Untitled Question {idx}"
                     field_type = "text"
                     is_required = False
 
-                    if block.find_elements(By.TAG_NAME, "input"):
+                    if await block.query_selector("input"):
                         field_type = "text"
-                    elif block.find_elements(By.TAG_NAME, "textarea"):
+                    elif await block.query_selector("textarea"):
                         field_type = "paragraph"
-                    elif block.find_elements(By.CSS_SELECTOR, 'input[type="radio"]'):
+                    elif await block.query_selector('input[type="radio"], div[role="radio"]'):
                         field_type = "multiple_choice"
-                    elif block.find_elements(By.CSS_SELECTOR, 'input[type="checkbox"]'):
+                    elif await block.query_selector('input[type="checkbox"], div[role="checkbox"]'):
                         field_type = "checkbox"
-                    elif block.find_elements(By.TAG_NAME, "select"):
+                    elif await block.query_selector("select, div[role='listbox']"):
                         field_type = "dropdown"
 
                     try:
-                        if block.find_element(By.CSS_SELECTOR, '[aria-required="true"]') or "*" in block.text:
+                        if await block.query_selector('[aria-required="true"]') or "*" in (await block.inner_text()):
                             is_required = True
                     except:
                         is_required = False
@@ -461,17 +470,16 @@ class FormParser:
                     }
 
                     if field_type in ["multiple_choice", "dropdown", "checkbox"]:
-                        option_elements = block.find_elements(By.CSS_SELECTOR, 'label, option')
-                        options = [opt.text.strip() for opt in option_elements if opt.text.strip()]
+                        option_elements = await block.query_selector_all('label, option, div[role="radio"], div[role="option"]')
+                        options = [await opt.inner_text() for opt in option_elements if (await opt.inner_text()).strip()]
                         if options:
-                            field["options"] = [{"value": opt, "text": opt, "selected": False, "disabled": False} for opt in set(options)]
+                            field["options"] = [{"value": opt, "text": opt, "selected": False, "disabled": False} for opt in sorted(set(options))]
 
                     fields_schema.append(field)
 
                 except Exception as e:
                     logger.warning(f"Microsoft Form Question {idx}: Error: {e}")
 
-            self.save_debug_html(self.driver.page_source, f"debug_microsoft_{str(uuid4())[:8]}.html")
             return {
                 "forms": [{
                     "id": str(uuid4()),
@@ -483,35 +491,28 @@ class FormParser:
                 }]
             }
 
-        except TimeoutException as e:
-            logger.error(f"Timeout while parsing Microsoft Form: {str(e)}")
-            raise ValueError("Failed to load Microsoft Form elements. Ensure you're logged in or use a public form URL. Debug HTML saved.")
         except Exception as e:
             logger.error(f"Error parsing Microsoft Form: {str(e)}")
             raise ValueError(f"Failed to parse Microsoft Form: {str(e)}")
 
-    def parse_custom_form(self, url: str) -> Dict[str, Any]:
+    async def parse_custom_form(self, url: str) -> Dict[str, Any]:
         try:
-            wait = WebDriverWait(self.driver, 30)
-            
-            iframes = self.driver.find_elements(By.TAG_NAME, "iframe")
+            iframes = await self.page.query_selector_all("iframe")
             html_content = None
             form_found = False
 
             for iframe in iframes:
                 try:
-                    self.driver.switch_to.frame(iframe)
-                    if self.driver.find_elements(By.TAG_NAME, "form"):
-                        html_content = self.driver.page_source
+                    frame = iframe.content_frame()
+                    if frame and await frame.query_selector("form"):
+                        html_content = await frame.content()
                         form_found = True
                         break
-                    self.driver.switch_to.default_content()
                 except Exception as e:
                     logger.debug(f"Iframe parsing error: {e}")
-                    self.driver.switch_to.default_content()
 
             if not form_found:
-                html_content = self.driver.page_source
+                html_content = await self.page.content()
 
             soup = self._create_soup(html_content)
             form_elements = soup.find_all('form')
@@ -543,9 +544,6 @@ class FormParser:
                 }]
             }
 
-        except TimeoutException as e:
-            logger.error(f"Timeout while parsing custom form: {str(e)}")
-            raise ValueError("Failed to load custom form elements. Ensure the URL is valid and accessible. Debug HTML saved.")
         except Exception as e:
             logger.error(f"Error parsing custom form: {str(e)}")
             raise ValueError(f"Failed to parse custom form: {str(e)}")
@@ -562,7 +560,6 @@ class FormParser:
                 "forms": [self._parse_form(form) for form in forms]
             }
             return result
-
         except Exception as e:
             logger.error(f"Error parsing HTML: {str(e)}")
             raise ValueError(f"Failed to parse HTML: {str(e)}")
@@ -656,7 +653,7 @@ class FormParser:
             return element.get('aria-label')
         return f"Untitled Field {str(uuid4())[:8]}"
 
-    def _parse_select_options(self, select: BeautifulSoup) -> List[Dict[str, str]]:
+    def _parse_select_options(self, select: BeautifulSoup) -> List[Dict[str, Any]]:
         options = []
         for option in select.find_all('option'):
             options.append({
@@ -684,16 +681,7 @@ class FormParser:
         return validation
 
     def to_json(self, data: Dict[str, Any], pretty: bool = True) -> str:
-        """
-        Convert parsed form data to JSON string with proper UTF-8 encoding.
-        
-        Args:
-            data: Parsed form data dictionary
-            pretty: If True, format JSON with indentation
-            
-        Returns:
-            JSON string representation of the form data
-        """
+        """Convert parsed form data to JSON string."""
         try:
             if pretty:
                 return json.dumps(data, indent=2, ensure_ascii=False)
@@ -702,8 +690,8 @@ class FormParser:
             logger.error(f"Error converting to JSON: {str(e)}")
             raise ValueError(f"Failed to convert data to JSON: {str(e)}")
 
-    def run_interactive(self):
-        """Run the parser interactively for testing HTML or URL-based form parsing."""
+    async def run_interactive(self):
+        """Run the parser interactively for testing."""
         print("\n=== Form Parser ===")
         print("Select the type of form to parse:")
         print("1. HTML Form (paste HTML or provide file path)")
@@ -711,7 +699,7 @@ class FormParser:
         print("3. Typeform (provide URL)")
         print("4. Microsoft Form (provide URL)")
         print("5. Custom Web Form (provide URL)")
-        debug_mode = input("\nEnable debug mode (saves HTML for troubleshooting)? [y/N]: ").strip().lower() == 'y'
+        debug_mode = input("\nEnable debug mode? [y/N]: ").strip().lower() == 'y'
 
         while True:
             try:
@@ -728,7 +716,6 @@ class FormParser:
                 form_types = {2: 'google', 3: 'typeform', 4: 'microsoft', 5: 'custom'}
                 output_file = f"parsed_{['html', 'google', 'typeform', 'microsoft', 'custom'][choice-1]}_form.json"
 
-                # Initialize parser
                 parser = FormParser(use_profile=(choice == 4), debug_mode=debug_mode)
                 if choice == 4 and parser.chrome_profile_path:
                     print(f"\nUsing Chrome profile: {parser.chrome_profile_path}\\{parser.chrome_profile_name}")
@@ -761,21 +748,19 @@ class FormParser:
                         print("Invalid choice. Please enter 1 or 2.")
                         continue
 
-                    result = parser.parse_html_content(html_input, is_file)
+                    result = await parser.parse_html_content(html_input, is_file)
 
                 else:
                     url = input(f"\nEnter the {['HTML', 'Google Form', 'Typeform', 'Microsoft Form', 'Custom Web Form'][choice-1]} URL: ").strip()
                     if not url:
                         print("URL cannot be empty.")
                         continue
-                    result = parser.parse_form_from_url(url, form_types[choice])
+                    result = await parser.parse_form_from_url(url, form_types[choice])
 
-                # Output results
                 print("\n=== Parsed Form Schema ===")
                 json_output = parser.to_json(result)
                 print(json_output)
 
-                # Save to file
                 with open(output_file, "w", encoding='utf-8') as f:
                     json.dump(result, f, indent=4, ensure_ascii=False)
                 print(f"\nSchema saved to {output_file}")
@@ -793,4 +778,4 @@ class FormParser:
 
 if __name__ == "__main__":
     sys.stdout.reconfigure(encoding='utf-8')
-    FormParser().run_interactive()
+    asyncio.run(FormParser().run_interactive())

@@ -268,6 +268,76 @@ header:hover {
   width: 100%;
 }
 
+.header-content nav a.active {
+  color: var(--text-primary);
+  background: var(--gradient-primary);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  box-shadow: var(--shadow-glow);
+}
+
+.profile-container {
+  position: relative;
+}
+
+.profile-icon {
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-elevated);
+  border-radius: 50%;
+  cursor: pointer;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.profile-icon:hover {
+  background: var(--gradient-primary);
+  box-shadow: var(--shadow-purple-glow);
+  transform: scale(1.1);
+}
+
+.profile-icon svg {
+  width: 24px;
+  height: 24px;
+}
+
+.profile-dropdown {
+  position: absolute;
+  top: 50px;
+  right: 0;
+  background: var(--bg-card);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg), var(--shadow-glow);
+  backdrop-filter: blur(10px);
+  z-index: 1000;
+  min-width: 150px;
+  overflow: hidden;
+}
+
+.profile-dropdown button {
+  display: block;
+  width: 100%;
+  padding: 12px 20px;
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 0.95rem;
+  text-align: left;
+  cursor: pointer;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.profile-dropdown button:hover {
+  background: var(--gradient-primary);
+  color: var(--text-primary);
+  transform: translateX(5px);
+}
+
 .app-container {
   max-width: 1280px;
   margin: 60px auto;
@@ -540,7 +610,7 @@ table:hover::before {
 
 th,
 td {
-  padding: 20px;
+  padding: 14px 20px;
   text-align: left;
   font-size: 0.95rem;
   border-bottom: 1px solid rgba(255, 255, 255, 0.1);
@@ -697,6 +767,14 @@ tr:hover td {
   backdrop-filter: blur(10px);
 }
 
+.form-group select {
+  appearance: none;
+  background-image: url('data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="%23f8fafc"%3E%3Cpath stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/%3E%3C/svg%3E');
+  background-repeat: no-repeat;
+  background-position: right 16px center;
+  background-size: 20px;
+}
+
 .form-group input::placeholder,
 .form-group textarea::placeholder {
   color: var(--text-dim);
@@ -725,7 +803,8 @@ tr:hover td {
   border-radius: 4px;
 }
 
-button[type="submit"] {
+button[type="submit"],
+.cyberpunk-btn {
   padding: 18px;
   background: var(--gradient-primary);
   color: var(--text-primary);
@@ -740,7 +819,8 @@ button[type="submit"] {
   box-shadow: var(--shadow-glow);
 }
 
-button[type="submit"]::before {
+button[type="submit"]::before,
+.cyberpunk-btn::before {
   content: "";
   position: absolute;
   top: 0;
@@ -756,16 +836,19 @@ button[type="submit"]::before {
   transition: left 0.4s ease;
 }
 
-button[type="submit"]:hover::before {
+button[type="submit"]:hover::before,
+.cyberpunk-btn:hover::before {
   left: 100%;
 }
 
-button[type="submit"]:hover {
+button[type="submit"]:hover,
+.cyberpunk-btn:hover {
   transform: translateY(-2px);
   box-shadow: var(--shadow-lg), var(--shadow-purple-glow);
 }
 
-button[type="submit"]:disabled {
+button[type="submit"]:disabled,
+.cyberpunk-btn:disabled {
   background: var(--bg-elevated);
   cursor: not-allowed;
   opacity: 0.5;
@@ -802,7 +885,6 @@ button[type="submit"]:disabled {
   }
 }
 
-/* Enhanced scrollbar styling */
 .chat-history::-webkit-scrollbar {
   width: 14px;
 }
@@ -898,6 +980,9 @@ button[type="submit"]:disabled {
   padding: 12px;
   border-radius: var(--radius-sm);
   transition: all 0.3s ease;
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
 
 .questions-container li:hover {
@@ -909,6 +994,34 @@ button[type="submit"]:disabled {
   color: var(--accent-cyan);
   font-weight: 700;
   text-shadow: 0 0 8px rgba(6, 214, 160, 0.3);
+}
+
+.questions-container select,
+.questions-container input {
+  margin-left: 10px;
+  padding: 10px;
+  width: 250px;
+  background: var(--bg-elevated);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-size: 0.95rem;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.questions-container select {
+  appearance: none;
+  background-image: url('data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="%23f8fafc"%3E%3Cpath stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/%3E%3C/svg%3E');
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  background-size: 18px;
+}
+
+.questions-container select:focus,
+.questions-container input:focus {
+  outline: none;
+  border-color: var(--accent-cyan);
+  box-shadow: 0 0 15px rgba(6, 214, 160, 0.3);
 }
 
 /* Footer */
@@ -942,7 +1055,7 @@ footer {
   text-decoration: none;
   font-weight: 500;
   transition: all 0.3s ease;
-  position: relative;
+  margin: 0 8px;
 }
 
 .footer-content a:hover {
@@ -1043,7 +1156,7 @@ textarea {
   border: 2px solid var(--accent-cyan);
   color: var(--accent-cyan);
   padding: 12px 24px;
-  border-radius: 0;
+  border-radius: var(--radius-md);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 1px;
@@ -1072,7 +1185,7 @@ textarea {
   box-shadow: 0 0 20px var(--accent-cyan), inset 0 0 20px rgba(6, 214, 160, 0.1);
 }
 
-/* Enhanced responsive design */
+/* Responsive design */
 @media (max-width: 1024px) {
   .app-container {
     margin: 40px auto;
@@ -1101,6 +1214,15 @@ textarea {
   .chat-container {
     margin: 16px;
     padding: 20px;
+  }
+
+  .profile-icon {
+    width: 36px;
+    height: 36px;
+  }
+
+  .profile-dropdown {
+    top: 40px;
   }
 }
 
@@ -1137,11 +1259,12 @@ textarea {
 
   th,
   td {
-    padding: 14px;
+    padding: 10px 14px;
     font-size: 0.85rem;
   }
 
-  button[type="submit"] {
+  button[type="submit"],
+  .cyberpunk-btn {
     padding: 16px;
     font-size: 1rem;
   }
@@ -1153,6 +1276,15 @@ textarea {
 
   .input-section {
     padding: 24px;
+  }
+
+  .questions-container select,
+  .questions-container input {
+    width: 100%;
+  }
+
+  .profile-dropdown {
+    min-width: 120px;
   }
 }
 
