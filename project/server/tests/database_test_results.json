@@ -1,0 +1,213 @@
+[
+  {
+    "test_name": "Database Initialization",
+    "success": true,
+    "message": "Database tables created successfully",
+    "timestamp": "2025-07-09T11:06:38.349365+00:00",
+    "data": null
+  },
+  {
+    "test_name": "Database Health Check",
+    "success": true,
+    "message": "Database is healthy and accessible",
+    "timestamp": "2025-07-09T11:06:38.354845+00:00",
+    "data": {
+      "status": "healthy",
+      "connection": "successful",
+      "database_info": {
+        "database_path": "C:\\Users\\khait\\Documents\\College\\Semester 5\\Hackathons\\CH\\Covasant_Hackathon\\project\\server\\database\\form_parser.db",
+        "database_url": "sqlite:///C:\\Users\\khait\\Documents\\College\\Semester 5\\Hackathons\\CH\\Covasant_Hackathon\\project\\server\\database\\form_parser.db",
+        "database_exists": true,
+        "database_size": 77824
+      },
+      "message": "Database is healthy and accessible"
+    }
+  },
+  {
+    "test_name": "User Creation",
+    "success": true,
+    "message": "Created user with ID: 2",
+    "timestamp": "2025-07-09T11:06:38.399691+00:00",
+    "data": {
+      "user_id": 2,
+      "session_id": "test-session-123"
+    }
+  },
+  {
+    "test_name": "User Retrieval",
+    "success": true,
+    "message": "Retrieved user with ID: 2",
+    "timestamp": "2025-07-09T11:06:38.406578+00:00",
+    "data": null
+  },
+  {
+    "test_name": "User Activity Update",
+    "success": true,
+    "message": "User activity updated successfully",
+    "timestamp": "2025-07-09T11:06:38.429294+00:00",
+    "data": null
+  },
+  {
+    "test_name": "Get or Create User",
+    "success": true,
+    "message": "Retrieved existing user with ID: 2",
+    "timestamp": "2025-07-09T11:06:38.456766+00:00",
+    "data": null
+  },
+  {
+    "test_name": "Form Creation",
+    "success": true,
+    "message": "Created form with ID: 2",
+    "timestamp": "2025-07-09T11:06:38.483726+00:00",
+    "data": {
+      "form_id": 2,
+      "title": "Test Form"
+    }
+  },
+  {
+    "test_name": "Form Retrieval",
+    "success": true,
+    "message": "Retrieved form with ID: 2",
+    "timestamp": "2025-07-09T11:06:38.489782+00:00",
+    "data": null
+  },
+  {
+    "test_name": "User Forms Retrieval",
+    "success": true,
+    "message": "Retrieved 1 forms for user",
+    "timestamp": "2025-07-09T11:06:38.498471+00:00",
+    "data": null
+  },
+  {
+    "test_name": "Form Field Creation",
+    "success": true,
+    "message": "Created 3 form fields",
+    "timestamp": "2025-07-09T11:06:38.620146+00:00",
+    "data": null
+  },
+  {
+    "test_name": "Form Fields Retrieval",
+    "success": true,
+    "message": "Retrieved 3 form fields",
+    "timestamp": "2025-07-09T11:06:38.626195+00:00",
+    "data": null
+  },
+  {
+    "test_name": "Individual Field Retrieval",
+    "success": true,
+    "message": "Retrieved field with ID: 2",
+    "timestamp": "2025-07-09T11:06:38.631995+00:00",
+    "data": null
+  },
+  {
+    "test_name": "Prompt Creation",
+    "success": true,
+    "message": "Created 2 prompts",
+    "timestamp": "2025-07-09T11:06:38.723276+00:00",
+    "data": null
+  },
+  {
+    "test_name": "Field Prompts Retrieval",
+    "success": true,
+    "message": "Retrieved 1 prompts for field",
+    "timestamp": "2025-07-09T11:06:38.735600+00:00",
+    "data": null
+  },
+  {
+    "test_name": "Multilingual Content Creation",
+    "success": true,
+    "message": "Created multilingual translations for field and prompt",
+    "timestamp": "2025-07-09T11:06:38.824053+00:00",
+    "data": null
+  },
+  {
+    "test_name": "Multilingual Content Retrieval",
+    "success": true,
+    "message": "Retrieved 1 field translations and 1 prompt translations",
+    "timestamp": "2025-07-09T11:06:38.858081+00:00",
+    "data": null
+  },
+  {
+    "test_name": "User Response Creation",
+    "success": true,
+    "message": "Created 2 user responses",
+    "timestamp": "2025-07-09T11:06:38.921780+00:00",
+    "data": null
+  },
+  {
+    "test_name": "User Responses Retrieval",
+    "success": true,
+    "message": "Retrieved 2 user responses",
+    "timestamp": "2025-07-09T11:06:38.926822+00:00",
+    "data": null
+  },
+  {
+    "test_name": "Field Response Retrieval",
+    "success": true,
+    "message": "Retrieved field response: John Doe",
+    "timestamp": "2025-07-09T11:06:38.931870+00:00",
+    "data": null
+  },
+  {
+    "test_name": "Conversation History Creation",
+    "success": true,
+    "message": "Created 5 conversation messages",
+    "timestamp": "2025-07-09T11:06:39.078039+00:00",
+    "data": null
+  },
+  {
+    "test_name": "Conversation History Retrieval",
+    "success": true,
+    "message": "Retrieved 5 conversation messages",
+    "timestamp": "2025-07-09T11:06:39.082065+00:00",
+    "data": null
+  },
+  {
+    "test_name": "Integration Form Storage",
+    "success": true,
+    "message": "Stored form through integration: user_id=3, form_id=3",
+    "timestamp": "2025-07-09T11:06:39.179846+00:00",
+    "data": null
+  },
+  {
+    "test_name": "Integration Prompts Storage",
+    "success": true,
+    "message": "Stored 2 prompts through integration",
+    "timestamp": "2025-07-09T11:06:39.219132+00:00",
+    "data": null
+  },
+  {
+    "test_name": "Integration Response Storage",
+    "success": true,
+    "message": "Stored response through integration: response_id=3",
+    "timestamp": "2025-07-09T11:06:39.258677+00:00",
+    "data": null
+  },
+  {
+    "test_name": "Integration Session Data Retrieval",
+    "success": true,
+    "message": "Retrieved session data: 1 forms, 1 responses",
+    "timestamp": "2025-07-09T11:06:39.270761+00:00",
+    "data": null
+  },
+  {
+    "test_name": "Form Completion Status",
+    "success": true,
+    "message": "Form completion: 66.66666666666666%",
+    "timestamp": "2025-07-09T11:06:39.278563+00:00",
+    "data": {
+      "total_fields": 3,
+      "completed_fields": 2,
+      "completion_percentage": 66.66666666666666,
+      "remaining_fields": 1,
+      "is_complete": false
+    }
+  },
+  {
+    "test_name": "System Logging",
+    "success": true,
+    "message": "System event logged successfully",
+    "timestamp": "2025-07-09T11:06:39.301906+00:00",
+    "data": null
+  }
+]
