@@ -10,6 +10,7 @@ from langchain_core.chat_history import InMemoryChatMessageHistory
 from langchain_core.messages import HumanMessage, AIMessage
 from dotenv import load_dotenv
 from multilingual_support import MultilingualSupport
+from database_manager import DatabaseManager
 import pytest
 
 # Configure logging
@@ -26,10 +27,11 @@ OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.2")
 class LLMConversation:
     """Manages conversational prompt generation from form fields using LangChain with Ollama."""
 
-    def __init__(self):
+    def __init__(self, db_manager: DatabaseManager = None):
         self.chat_history = InMemoryChatMessageHistory()
         self.llm = self._initialize_llm()
-        self.multilingual = MultilingualSupport()
+        self.db_manager = db_manager or DatabaseManager()
+        self.multilingual = MultilingualSupport(self.db_manager)
         self.prompt_templates = self._define_prompt_templates()
         self.runnable = RunnableWithMessageHistory(
             runnable=self.llm,
@@ -111,13 +113,15 @@ class LLMConversation:
         }
         return templates
 
-    def generate_questions(self, form_schema: Dict[str, Any], context: str = "", language: str = "en") -> List[Dict[str, str]]:
-        """Generate conversational questions for each field in the form schema."""
+    def generate_questions(self, form_schema: Dict[str, Any], context: str = "", language: str = "en",
+                          form_id: int = None) -> List[Dict[str, str]]:
+        """Generate conversational questions for each field in the form schema with database persistence."""
         questions = []
         try:
             # Translate form schema
             translated_schema = self.multilingual.translate_form_fields(form_schema, language)
             form_fields = translated_schema.get("forms", [{}])[0].get("fields", [])
+
             for field in form_fields:
                 field_type = field.get("type", "text")
                 label = field.get("translated_label", field.get("label", "Untitled Field"))
@@ -135,26 +139,72 @@ class LLMConversation:
                         "options": options,
                         "context": context
                     }).strip()
+
                     # Ensure question is clean
                     if question.startswith("def ") or "print(" in question:
                         question = f"Can you provide your {label}?"
-                    questions.append({
+
+                    # Translate question if needed
+                    translated_question = self.multilingual.translate(question, "en", language) if language != "en" else question
+
+                    question_data = {
                         "field_id": field.get("id"),
                         "label": field.get("label"),
                         "question": question,
-                        "translated_question": self.multilingual.translate(question, "en", language) if language != "en" else question
-                    })
+                        "translated_question": translated_question,
+                        "field_type": field_type,
+                        "language": language,
+                        "context": context
+                    }
+
+                    # Save to database if form_id is provided
+                    if form_id and self.db_manager:
+                        try:
+                            # Get or create form field in database
+                            form_fields_db = self.db_manager.get_form_fields(form_id)
+                            field_db = next((f for f in form_fields_db if f['field_name'] == field.get("name", field.get("id"))), None)
+
+                            if field_db:
+                                # Save prompt to database
+                                prompt_data = [{
+                                    "text": question,
+                                    "type": "question",
+                                    "language": "en",
+                                    "context": context
+                                }]
+
+                                if language != "en":
+                                    prompt_data.append({
+                                        "text": translated_question,
+                                        "type": "question",
+                                        "language": language,
+                                        "context": context
+                                    })
+
+                                prompt_ids = self.db_manager.save_prompts(field_db['id'], prompt_data)
+                                question_data["prompt_ids"] = prompt_ids
+                                logger.info(f"Saved prompts to database for field '{label}'")
+                        except Exception as e:
+                            logger.error(f"Error saving prompt to database: {str(e)}")
+
+                    questions.append(question_data)
                     logger.info(f"Generated question for field '{label}': {question}")
                     self.chat_history.add_user_message(field_input)
                     self.chat_history.add_ai_message(question)
+
                 except Exception as e:
                     logger.error(f"Error generating question for field '{label}': {str(e)}")
                     fallback_question = f"Can you provide your {label}?"
+                    translated_fallback = self.multilingual.translate(fallback_question, "en", language) if language != "en" else fallback_question
+
                     questions.append({
                         "field_id": field.get("id"),
                         "label": field.get("label"),
                         "question": fallback_question,
-                        "translated_question": self.multilingual.translate(fallback_question, "en", language) if language != "en" else fallback_question
+                        "translated_question": translated_fallback,
+                        "field_type": field_type,
+                        "language": language,
+                        "context": context
                     })
                     self.chat_history.add_user_message(field_input)
                     self.chat_history.add_ai_message(fallback_question)
@@ -164,48 +214,91 @@ class LLMConversation:
             logger.error(f"Error processing form schema: {str(e)}")
             return []
 
-    def parse_response(self, user_response: str, field: Dict[str, Any], user_language: str = "en") -> Dict[str, Any]:
-        """Parse and validate user response based on field type."""
+    def parse_response(self, user_response: str, field: Dict[str, Any], user_language: str = "en",
+                      conversation_id: int = None, prompt_id: int = None) -> Dict[str, Any]:
+        """Parse and validate user response based on field type with database persistence."""
         try:
             field_type = field.get("type", "text")
             label = field.get("translated_label", field.get("label", "Untitled Field"))
             validation = field.get("validation", {})
+
             # Translate user response to English for validation
             response_en = self.multilingual.translate_response(user_response, user_language, "en")
-            response_data = {"field_id": field.get("id"), "value": response_en, "valid": True, "original_response": user_response}
+            response_data = {
+                "field_id": field.get("id"),
+                "value": response_en,
+                "valid": True,
+                "original_response": user_response,
+                "response_language": user_language,
+                "validation_status": "valid"
+            }
 
             if validation.get("required") and not response_en.strip():
                 response_data["valid"] = False
+                response_data["validation_status"] = "invalid"
                 response_data["error"] = f"{label} is required."
                 self.chat_history.add_user_message(f"Field: {label}, Response: {user_response}")
                 self.chat_history.add_ai_message("Validation: Invalid")
+
+                # Save to database if conversation_id and prompt_id are provided
+                if conversation_id and prompt_id and self.db_manager:
+                    try:
+                        self.db_manager.save_user_response(
+                            conversation_id, prompt_id, user_response,
+                            user_language, confidence_score=0.5
+                        )
+                        self.db_manager.update_response_validation(
+                            conversation_id, "invalid"
+                        )
+                    except Exception as e:
+                        logger.error(f"Error saving invalid response to database: {str(e)}")
+
                 return response_data
 
             if field_type in ["multiple_choice", "dropdown"]:
                 options = [opt["translated_text"] for opt in field.get("translated_options", field.get("options", []))]
                 if response_en not in [opt["text"] for opt in field.get("options", [])]:
                     response_data["valid"] = False
+                    response_data["validation_status"] = "invalid"
                     response_data["error"] = f"Invalid option selected for {label}. Choose from: {', '.join(options)}"
                 self.chat_history.add_user_message(f"Field: {label}, Response: {user_response}")
                 self.chat_history.add_ai_message(f"Validation: {'Valid' if response_data['valid'] else 'Invalid'}")
+
             elif field_type == "checkbox":
                 options = [opt["translated_text"] for opt in field.get("translated_options", field.get("options", []))]
                 selected = [r.strip() for r in response_en.split(",") if r.strip()]
                 invalid = [s for s in selected if s not in [opt["text"] for opt in field.get("options", [])]]
                 if invalid:
                     response_data["valid"] = False
+                    response_data["validation_status"] = "invalid"
                     response_data["error"] = f"Invalid options for {label}: {', '.join(invalid)}"
                 response_data["value"] = selected
                 self.chat_history.add_user_message(f"Field: {label}, Response: {user_response}")
                 self.chat_history.add_ai_message(f"Validation: {'Valid' if response_data['valid'] else 'Invalid'}")
+
             elif field_type == "email":
                 if not "@" in response_en or not "." in response_en:
                     response_data["valid"] = False
+                    response_data["validation_status"] = "invalid"
                     response_data["error"] = f"Invalid email format for {label}."
                 self.chat_history.add_user_message(f"Field: {label}, Response: {user_response}")
                 self.chat_history.add_ai_message(f"Validation: {'Valid' if response_data['valid'] else 'Invalid'}")
 
+            # Save valid response to database
+            if conversation_id and prompt_id and self.db_manager and response_data["valid"]:
+                try:
+                    response_id = self.db_manager.save_user_response(
+                        conversation_id, prompt_id, user_response,
+                        user_language, confidence_score=1.0
+                    )
+                    self.db_manager.update_response_validation(response_id, "valid")
+                    response_data["response_id"] = response_id
+                    logger.info(f"Saved valid response to database: {response_id}")
+                except Exception as e:
+                    logger.error(f"Error saving valid response to database: {str(e)}")
+
             return response_data
+
         except Exception as e:
             logger.error(f"Error parsing response for field '{field.get('label')}': {str(e)}")
             response_data = {
@@ -213,7 +306,9 @@ class LLMConversation:
                 "value": user_response,
                 "valid": False,
                 "error": f"Failed to validate response: {str(e)}",
-                "original_response": user_response
+                "original_response": user_response,
+                "response_language": user_language,
+                "validation_status": "error"
             }
             self.chat_history.add_user_message(f"Field: {field.get('label', 'Untitled Field')}, Response: {user_response}")
             self.chat_history.add_ai_message("Validation: Invalid")
@@ -228,6 +323,169 @@ class LLMConversation:
         """Clear conversation history."""
         self.chat_history.clear()
         logger.info("Conversation context cleared")
+
+    def start_conversation(self, user_id: int, form_id: int, language: str = "en") -> Optional[int]:
+        """Start a new conversation in the database."""
+        try:
+            conversation_id = self.db_manager.create_conversation(user_id, form_id, language)
+            logger.info(f"Started conversation: {conversation_id}")
+            return conversation_id
+        except Exception as e:
+            logger.error(f"Error starting conversation: {str(e)}")
+            return None
+
+    def update_conversation_progress(self, conversation_id: int, current_field_index: int):
+        """Update conversation progress in database."""
+        try:
+            self.db_manager.update_conversation_progress(conversation_id, current_field_index)
+            logger.info(f"Updated conversation {conversation_id} progress to field {current_field_index}")
+        except Exception as e:
+            logger.error(f"Error updating conversation progress: {str(e)}")
+
+    def complete_conversation(self, conversation_id: int):
+        """Mark conversation as completed in database."""
+        try:
+            self.db_manager.complete_conversation(conversation_id)
+            logger.info(f"Completed conversation: {conversation_id}")
+        except Exception as e:
+            logger.error(f"Error completing conversation: {str(e)}")
+
+    def get_conversation_responses(self, conversation_id: int) -> List[Dict]:
+        """Get all responses for a conversation from database."""
+        try:
+            return self.db_manager.get_conversation_responses(conversation_id)
+        except Exception as e:
+            logger.error(f"Error getting conversation responses: {str(e)}")
+            return []
+
+    def generate_question_for_field(self, field: Dict, language: str = "en") -> str:
+        """Generate a single question for a form field."""
+        try:
+            field_type = field.get('field_type', 'text')
+            field_label = field.get('field_label', field.get('field_name', 'Field'))
+            field_required = field.get('field_required', False)
+            field_options = field.get('field_options')
+
+            # Parse options if they exist
+            options_text = ""
+            if field_options:
+                try:
+                    options = json.loads(field_options) if isinstance(field_options, str) else field_options
+                    if isinstance(options, list):
+                        options_text = f" Options: {', '.join([str(opt) for opt in options])}"
+                except:
+                    pass
+
+            # Create context for question generation
+            context = f"Generate a conversational question for form field '{field_label}' of type '{field_type}'"
+            if field_required:
+                context += " (required field)"
+            if options_text:
+                context += options_text
+
+            prompt = f"""
+            Generate a natural, conversational question for a form field with the following details:
+            - Field Label: {field_label}
+            - Field Type: {field_type}
+            - Required: {field_required}
+            {options_text}
+
+            The question should be:
+            1. Conversational and friendly
+            2. Clear about what information is needed
+            3. In {language} language
+            4. Include options if it's a multiple choice field
+
+            Return only the question text.
+            """
+
+            if self.model:
+                response = self.model.generate_content(prompt)
+                question = response.text.strip() if response.text else f"What is your {field_label}?"
+            else:
+                question = f"What is your {field_label}?"
+
+            # Store in database if we have a db_manager
+            if hasattr(self, 'db_manager') and self.db_manager:
+                self.db_manager.create_prompt(field['id'], question, language)
+
+            return question
+
+        except Exception as e:
+            logger.error(f"Error generating question for field: {str(e)}")
+            return f"Please provide your {field.get('field_label', 'response')}:"
+
+    def validate_response(self, response_text: str, field: Dict, language: str = "en") -> Dict:
+        """Validate a user response against a field."""
+        try:
+            field_type = field.get('field_type', 'text')
+            field_required = field.get('field_required', False)
+            field_options = field.get('field_options')
+
+            # Basic validation
+            if field_required and not response_text.strip():
+                return {
+                    "valid": False,
+                    "error": "This field is required",
+                    "confidence": 0.0
+                }
+
+            # Type-specific validation
+            if field_type in ['multiple_choice', 'dropdown']:
+                if field_options:
+                    try:
+                        options = json.loads(field_options) if isinstance(field_options, str) else field_options
+                        if isinstance(options, list):
+                            # Check if response matches any option
+                            response_lower = response_text.lower().strip()
+                            for option in options:
+                                if str(option).lower() == response_lower:
+                                    return {"valid": True, "confidence": 1.0}
+
+                            # Use LLM to check for close matches
+                            if self.model:
+                                prompt = f"""
+                                Check if the user response "{response_text}" matches any of these options: {options}
+                                Consider synonyms, partial matches, and different languages.
+                                Return "VALID" if it matches an option, "INVALID" if not.
+                                If valid, also return which option it matches.
+                                """
+
+                                llm_response = self.model.generate_content(prompt)
+                                if llm_response.text and "VALID" in llm_response.text.upper():
+                                    return {"valid": True, "confidence": 0.8}
+                                else:
+                                    return {
+                                        "valid": False,
+                                        "error": f"Please choose from: {', '.join([str(opt) for opt in options])}",
+                                        "confidence": 0.0
+                                    }
+                            else:
+                                return {
+                                    "valid": False,
+                                    "error": f"Please choose from: {', '.join([str(opt) for opt in options])}",
+                                    "confidence": 0.0
+                                }
+                    except:
+                        pass
+
+            # For text fields, basic validation
+            if field_type == 'email':
+                import re
+                email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+                if not re.match(email_pattern, response_text):
+                    return {
+                        "valid": False,
+                        "error": "Please enter a valid email address",
+                        "confidence": 0.0
+                    }
+
+            # If we get here, it's valid
+            return {"valid": True, "confidence": 0.9}
+
+        except Exception as e:
+            logger.error(f"Error validating response: {str(e)}")
+            return {"valid": True, "confidence": 0.5}  # Default to valid if validation fails
 
 # Testing Framework
 def test_llm_conversation():

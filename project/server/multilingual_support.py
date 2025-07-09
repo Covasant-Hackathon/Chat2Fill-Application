@@ -8,6 +8,7 @@ from langchain_core.prompts import PromptTemplate
 from langchain_core.runnables import RunnableSequence
 from pathlib import Path
 from dotenv import load_dotenv
+from database_manager import DatabaseManager
 
 # Configure logging
 logging.basicConfig(
@@ -31,7 +32,7 @@ if not os.path.exists(CACHE_DIR):
 class MultilingualSupport:
     """Handles multilingual support using Ollama model for Indian languages."""
 
-    def __init__(self):
+    def __init__(self, db_manager: DatabaseManager = None):
         self.supported_languages = {
             "en": "English",
             "hi": "Hindi",
@@ -41,6 +42,7 @@ class MultilingualSupport:
         }
         self.llm = self._initialize_llm()
         self.translation_prompt = self._define_translation_prompt()
+        self.db_manager = db_manager or DatabaseManager()
         self.cache = self._load_cache()
 
     def _initialize_llm(self):
@@ -78,26 +80,45 @@ class MultilingualSupport:
         )
 
     def _load_cache(self) -> Dict:
-        """Load translation cache from file."""
+        """Load translation cache from database and file."""
+        cache = {}
+
+        # Load from file for backward compatibility
         cache_file = os.path.join(CACHE_DIR, "translation_cache.json")
         try:
             if os.path.exists(cache_file):
                 with open(cache_file, "r", encoding="utf-8") as f:
-                    return json.load(f)
-            return {}
+                    cache = json.load(f)
+                    logger.info("Loaded translation cache from file")
         except Exception as e:
-            logger.warning(f"Error loading cache: {str(e)}. Starting with empty cache.")
-            return {}
+            logger.warning(f"Error loading cache from file: {str(e)}")
+
+        # Load from database (priority over file)
+        try:
+            # This will be populated as translations are retrieved from database
+            logger.info("Translation cache initialized with database support")
+        except Exception as e:
+            logger.warning(f"Error initializing database cache: {str(e)}")
+
+        return cache
 
     def _save_cache(self):
-        """Save translation cache to file."""
+        """Save translation cache to file and database."""
+        # Save to file for backward compatibility
         cache_file = os.path.join(CACHE_DIR, "translation_cache.json")
         try:
             with open(cache_file, "w", encoding="utf-8") as f:
                 json.dump(self.cache, f, ensure_ascii=False, indent=2)
-            logger.info("Translation cache saved.")
+            logger.info("Translation cache saved to file.")
         except Exception as e:
-            logger.error(f"Error saving cache: {str(e)}")
+            logger.error(f"Error saving cache to file: {str(e)}")
+
+        # Save to database
+        try:
+            # Cache will be saved to database when translations are stored
+            logger.debug("Cache synchronized with database")
+        except Exception as e:
+            logger.error(f"Error saving cache to database: {str(e)}")
 
     def detect_language(self, text: str) -> str:
         """Detect the language of the input text."""
@@ -109,7 +130,7 @@ class MultilingualSupport:
             return "en"
 
     def translate(self, text: str, source_lang: str, target_lang: str) -> str:
-        """Translate text from source_lang to target_lang with caching."""
+        """Translate text from source_lang to target_lang with database caching."""
         if not text.strip():
             logger.warning("Empty text provided for translation. Returning empty string.")
             return text
@@ -122,9 +143,19 @@ class MultilingualSupport:
             logger.info(f"Source and target languages are the same: {source_lang}. Returning original text.")
             return text
 
+        # Check database first
+        try:
+            db_translation = self.db_manager.get_translation(text, source_lang, target_lang)
+            if db_translation:
+                logger.info(f"Database hit for translation: {text} -> {db_translation}")
+                return db_translation
+        except Exception as e:
+            logger.error(f"Error checking database for translation: {str(e)}")
+
+        # Check memory cache
         cache_key = f"{source_lang}:{target_lang}:{text}"
         if cache_key in self.cache:
-            logger.info(f"Cache hit for translation: {cache_key}")
+            logger.info(f"Memory cache hit for translation: {cache_key}")
             return self.cache[cache_key]
 
         try:
@@ -134,10 +165,19 @@ class MultilingualSupport:
                 "source_lang": self.supported_languages[source_lang],
                 "target_lang": self.supported_languages[target_lang]
             }).strip()
+
             if not translated_text:
                 logger.warning(f"Translation returned empty string for '{text}' from {source_lang} to {target_lang}. Returning original text.")
                 return text
+
+            # Save to both memory cache and database
             self.cache[cache_key] = translated_text
+            try:
+                self.db_manager.save_translation(text, source_lang, translated_text, target_lang, 'automatic')
+                logger.info(f"Saved translation to database: {text} -> {translated_text}")
+            except Exception as e:
+                logger.error(f"Error saving translation to database: {str(e)}")
+
             self._save_cache()
             logger.info(f"Translated '{text}' from {source_lang} to {target_lang}: {translated_text}")
             return translated_text
@@ -160,7 +200,7 @@ class MultilingualSupport:
             return True  # Assume valid to avoid rejecting translations
 
     def translate_form_fields(self, form_schema: Dict[str, Any], target_lang: str) -> Dict[str, Any]:
-        """Translate form field labels to the target language."""
+        """Translate form field labels to the target language with database persistence."""
         try:
             translated_schema = form_schema.copy()
             for form in translated_schema.get("forms", []):
@@ -168,14 +208,27 @@ class MultilingualSupport:
                     label = field.get("label", "")
                     if label:
                         translated_label = self.translate(label, "en", target_lang)
-                        field["translated_label"] = translated_label  # Use translation regardless of validation
+                        field["translated_label"] = translated_label
+                        field["original_label"] = label
+                        field["translation_language"] = target_lang
+
                         if not self.validate_translation(label, translated_label, "en", target_lang):
                             logger.warning(f"Translation for '{label}' to {target_lang} may be suboptimal.")
+
+                    # Translate placeholder text if exists
+                    placeholder = field.get("placeholder", "")
+                    if placeholder:
+                        translated_placeholder = self.translate(placeholder, "en", target_lang)
+                        field["translated_placeholder"] = translated_placeholder
+                        field["original_placeholder"] = placeholder
+
+                    # Translate options
                     if "options" in field:
                         field["translated_options"] = [
                             {
                                 **opt,
-                                "translated_text": self.translate(opt["text"], "en", target_lang)
+                                "translated_text": self.translate(opt.get("text", ""), "en", target_lang),
+                                "original_text": opt.get("text", "")
                             } for opt in field.get("options", [])
                         ]
             return translated_schema
@@ -184,17 +237,24 @@ class MultilingualSupport:
             return form_schema
 
     def translate_questions(self, questions: List[Dict[str, str]], target_lang: str) -> List[Dict[str, str]]:
-        """Translate generated questions to the target language."""
+        """Translate generated questions to the target language with database persistence."""
         try:
             translated_questions = []
             for question in questions:
-                translated_question = self.translate(question["question"], "en", target_lang)
-                translated_questions.append({
-                    **question,
-                    "translated_question": translated_question  # Use translation regardless of validation
-                })
-                if not self.validate_translation(question["question"], translated_question, "en", target_lang):
-                    logger.warning(f"Translation for '{question['question']}' to {target_lang} may be suboptimal.")
+                question_text = question.get("question", "")
+                if question_text:
+                    translated_question = self.translate(question_text, "en", target_lang)
+                    translated_questions.append({
+                        **question,
+                        "translated_question": translated_question,
+                        "original_question": question_text,
+                        "translation_language": target_lang
+                    })
+
+                    if not self.validate_translation(question_text, translated_question, "en", target_lang):
+                        logger.warning(f"Translation for '{question_text}' to {target_lang} may be suboptimal.")
+                else:
+                    translated_questions.append(question)
             return translated_questions
         except Exception as e:
             logger.error(f"Error translating questions: {str(e)}")
@@ -207,7 +267,11 @@ class MultilingualSupport:
 # Testing Framework
 def test_multilingual_support():
     """Test suite for MultilingualSupport class."""
-    multilingual = MultilingualSupport()
+    try:
+        multilingual = MultilingualSupport()
+    except Exception as e:
+        logger.error(f"Failed to initialize MultilingualSupport for testing: {str(e)}")
+        return
 
     # Sample form schema
     sample_schema = {

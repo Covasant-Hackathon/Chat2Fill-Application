@@ -55,7 +55,7 @@ def get_default_chrome_paths() -> tuple[str, str]:
     """Detect default Chrome user data directory based on the operating system."""
     system = platform.system()
     username = os.getlogin() if system != "Darwin" else os.path.expanduser("~").split("/")[-1]
-    
+
     profile_path = ""
     if system == "Windows":
         profile_path = f"C:\\Users\\{username}\\AppData\\Local\\Google\\Chrome\\User Data"
@@ -63,14 +63,14 @@ def get_default_chrome_paths() -> tuple[str, str]:
         profile_path = f"/Users/{username}/Library/Application Support/Google/Chrome"
     elif system == "Linux":
         profile_path = f"/home/{username}/.config/google-chrome"
-    
+
     return profile_path, "Default"
 
 def load_config() -> tuple[str, str]:
     """Load Chrome profile settings from config.json or use defaults."""
     config_file = "config.json"
     default_path, default_name = get_default_chrome_paths()
-    
+
     env_profile_path = CHROME_USER_DATA_DIR
     if env_profile_path and os.path.exists(env_profile_path):
         logger.info(f"Using CHROME_USER_DATA_DIR from .env: {env_profile_path}")
@@ -88,7 +88,7 @@ def load_config() -> tuple[str, str]:
                 logger.warning(f"Invalid profile path in config.json: {path}. Using defaults.")
         except Exception as e:
             logger.warning(f"Error reading config.json: {str(e)}. Using defaults.")
-    
+
     logger.info(f"Using default profile path: {default_path}")
     return default_path, default_name
 
@@ -129,7 +129,6 @@ class FormParser:
                 try:
                     self.context = await self.playwright.chromium.launch_persistent_context(
                         user_data_dir=Path(self.chrome_profile_path),
-                        channel="chrome",
                         headless=False,
                         args=["--disable-extensions", "--no-sandbox"],
                         viewport={"width": 1280, "height": 720}
@@ -137,10 +136,10 @@ class FormParser:
                     logger.info(f"Using persistent context with profile: {self.chrome_profile_path}")
                 except Exception as e:
                     logger.warning(f"Failed to use profile {self.chrome_profile_path}: {str(e)}. Falling back to new context.")
-                    browser = await self.playwright.chromium.launch(headless=False, channel="chrome")
+                    browser = await self.playwright.chromium.launch(headless=False)
                     self.context = await browser.new_context(viewport={"width": 1280, "height": 720})
             else:
-                browser = await self.playwright.chromium.launch(headless=False, channel="chrome")
+                browser = await self.playwright.chromium.launch(headless=False)
                 self.context = await browser.new_context(viewport={"width": 1280, "height": 720})
             self.page = await self.context.new_page()
             logger.info("Playwright initialized successfully")
@@ -726,7 +725,7 @@ class FormParser:
                     print("1. Paste HTML content directly")
                     print("2. Provide a file path containing HTML")
                     html_choice = input("Enter 1 or 2: ").strip()
-                    
+
                     html_input = ""
                     is_file = False
                     if html_choice == '1':

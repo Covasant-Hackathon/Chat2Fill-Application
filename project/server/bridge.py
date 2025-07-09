@@ -30,16 +30,35 @@ class FormRequest(BaseModel):
     url: str
     form_type: str
     language: str = "en"
+    session_id: str = None
 
 class HTMLRequest(BaseModel):
     html_input: str
     is_file: bool = False
     language: str = "en"
+    session_id: str = None
 
 class AutofillRequest(BaseModel):
     url: str
     form_schema: dict
     responses: list
+    language: str = "en"
+
+class ConversationRequest(BaseModel):
+    session_id: str
+    form_id: int
+    language: str = "en"
+
+class ResponseRequest(BaseModel):
+    session_id: str
+    conversation_id: int
+    field_name: str
+    response_text: str
+    language: str = "en"
+
+class NextQuestionRequest(BaseModel):
+    session_id: str
+    conversation_id: int
     language: str = "en"
 
 # Existing parse_form endpoint
@@ -111,10 +130,10 @@ async def parse_html_form_endpoint(request: HTMLRequest):
 async def autofill_form_endpoint(request: AutofillRequest):
     """
     Receive HTTP POST request to autofill a form via FastMCP server.
-    
+
     Args:
         request: AutofillRequest with url, form_schema, responses, and language.
-    
+
     Returns:
         dict: Autofill status, filled fields, errors, screenshots, and logs.
     """
@@ -148,6 +167,132 @@ async def autofill_form_endpoint(request: AutofillRequest):
             return response
     except Exception as e:
         logger.error(f"Error processing autofill_form request: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
+    finally:
+        if 'client' in locals() and hasattr(client, 'transport') and client.transport:
+            await client.transport.close()
+
+# New conversational endpoints
+@app.post("/start_conversation")
+async def start_conversation_endpoint(request: ConversationRequest):
+    """Start a new conversational form filling session."""
+    logger.info(f"Starting conversation for session: {request.session_id}, form: {request.form_id}")
+    try:
+        client = Client("server.py")
+        async with client:
+            response = await client.call_tool("start_conversation", {
+                "session_id": request.session_id,
+                "form_id": request.form_id,
+                "language": request.language
+            })
+            if isinstance(response, list):
+                if len(response) == 0:
+                    raise ValueError("Empty response list from server")
+                response = response[0]
+            if hasattr(response, 'text'):
+                response_text = response.text.strip()
+                if response_text.startswith("```json"):
+                    response_text = response_text[7:].strip()
+                if response_text.endswith("```"):
+                    response_text = response_text[:-3].strip()
+                response = json.loads(response_text)
+            return response
+    except Exception as e:
+        logger.error(f"Error starting conversation: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
+    finally:
+        if 'client' in locals() and hasattr(client, 'transport') and client.transport:
+            await client.transport.close()
+
+@app.post("/get_next_question")
+async def get_next_question_endpoint(request: NextQuestionRequest):
+    """Get the next question in the conversation."""
+    logger.info(f"Getting next question for conversation: {request.conversation_id}")
+    try:
+        client = Client("server.py")
+        async with client:
+            response = await client.call_tool("get_next_question", {
+                "session_id": request.session_id,
+                "conversation_id": request.conversation_id,
+                "language": request.language
+            })
+            if isinstance(response, list):
+                if len(response) == 0:
+                    raise ValueError("Empty response list from server")
+                response = response[0]
+            if hasattr(response, 'text'):
+                response_text = response.text.strip()
+                if response_text.startswith("```json"):
+                    response_text = response_text[7:].strip()
+                if response_text.endswith("```"):
+                    response_text = response_text[:-3].strip()
+                response = json.loads(response_text)
+            return response
+    except Exception as e:
+        logger.error(f"Error getting next question: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
+    finally:
+        if 'client' in locals() and hasattr(client, 'transport') and client.transport:
+            await client.transport.close()
+
+@app.post("/submit_response")
+async def submit_response_endpoint(request: ResponseRequest):
+    """Submit a user response to a conversation."""
+    logger.info(f"Submitting response for conversation: {request.conversation_id}")
+    try:
+        client = Client("server.py")
+        async with client:
+            response = await client.call_tool("submit_user_response", {
+                "session_id": request.session_id,
+                "conversation_id": request.conversation_id,
+                "field_name": request.field_name,
+                "response_text": request.response_text,
+                "language": request.language
+            })
+            if isinstance(response, list):
+                if len(response) == 0:
+                    raise ValueError("Empty response list from server")
+                response = response[0]
+            if hasattr(response, 'text'):
+                response_text = response.text.strip()
+                if response_text.startswith("```json"):
+                    response_text = response_text[7:].strip()
+                if response_text.endswith("```"):
+                    response_text = response_text[:-3].strip()
+                response = json.loads(response_text)
+            return response
+    except Exception as e:
+        logger.error(f"Error submitting response: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
+    finally:
+        if 'client' in locals() and hasattr(client, 'transport') and client.transport:
+            await client.transport.close()
+
+@app.get("/conversation_summary/{session_id}/{conversation_id}")
+async def get_conversation_summary(session_id: str, conversation_id: int):
+    """Get a summary of the completed conversation."""
+    logger.info(f"Getting conversation summary for: {conversation_id}")
+    try:
+        client = Client("server.py")
+        async with client:
+            response = await client.call_tool("get_conversation_summary", {
+                "session_id": session_id,
+                "conversation_id": conversation_id
+            })
+            if isinstance(response, list):
+                if len(response) == 0:
+                    raise ValueError("Empty response list from server")
+                response = response[0]
+            if hasattr(response, 'text'):
+                response_text = response.text.strip()
+                if response_text.startswith("```json"):
+                    response_text = response_text[7:].strip()
+                if response_text.endswith("```"):
+                    response_text = response_text[:-3].strip()
+                response = json.loads(response_text)
+            return response
+    except Exception as e:
+        logger.error(f"Error getting conversation summary: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
     finally:
         if 'client' in locals() and hasattr(client, 'transport') and client.transport:
