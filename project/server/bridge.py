@@ -30,13 +30,13 @@ class FormRequest(BaseModel):
     url: str
     form_type: str
     language: str = "en"
-    session_id: str = None
+    session_id: str
 
 class HTMLRequest(BaseModel):
     html_input: str
     is_file: bool = False
     language: str = "en"
-    session_id: str = None
+    session_id: str
 
 class AutofillRequest(BaseModel):
     url: str
@@ -67,11 +67,12 @@ async def parse_form_endpoint(request: FormRequest):
     url = request.url
     form_type = request.form_type
     language = request.language
-    logger.info(f"Received parse_form request: url={url}, form_type={form_type}, language={language}")
+    session_id = request.session_id
+    logger.info(f"Received parse_form request: url={url}, form_type={form_type}, language={language}, session_id={session_id}")
     try:
         client = Client("server.py")
         async with client:
-            response = await client.call_tool("parse_form", {"url": url, "form_type": form_type, "language": language})
+            response = await client.call_tool("parse_form", {"url": url, "form_type": form_type, "language": language, "session_id": session_id})
             if isinstance(response, list):
                 if len(response) == 0:
                     raise ValueError("Empty response list from server")
@@ -99,11 +100,12 @@ async def parse_html_form_endpoint(request: HTMLRequest):
     html_input = request.html_input
     is_file = request.is_file
     language = request.language
-    logger.info(f"Received parse_html_form request: is_file={is_file}, language={language}")
+    session_id = request.session_id
+    logger.info(f"Received parse_html_form request: is_file={is_file}, language={language}, session_id={session_id}")
     try:
         client = Client("server.py")
         async with client:
-            response = await client.call_tool("parse_html_form", {"html_input": html_input, "is_file": is_file, "language": language})
+            response = await client.call_tool("parse_html_form", {"html_input": html_input, "is_file": is_file, "language": language, "session_id": session_id})
             if isinstance(response, list):
                 if len(response) == 0:
                     raise ValueError("Empty response list from server")
