@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from "react";
 import "./App.css";
 import axios from "axios";
 import JSONViewer from "react-json-view";
+import ConversationalChat from "./components/ConversationalChat";
 
 const App = () => {
   const [formType, setFormType] = useState("google");
@@ -16,6 +17,9 @@ const App = () => {
   const [viewMode, setViewMode] = useState("table");
   const [responses, setResponses] = useState({});
   const [isProfileOpen, setIsProfileOpen] = useState(false);
+  const [sessionId, setSessionId] = useState("");
+  const [showConversationalChat, setShowConversationalChat] = useState(false);
+  const [currentFormData, setCurrentFormData] = useState(null);
   const chatEndRef = useRef(null);
   const profileRef = useRef(null);
 
@@ -31,6 +35,16 @@ const App = () => {
     };
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  useEffect(() => {
+    // Generate session ID on component mount
+    const generateSessionId = () => {
+      return (
+        "session_" + Math.random().toString(36).substr(2, 9) + "_" + Date.now()
+      );
+    };
+    setSessionId(generateSessionId());
   }, []);
 
   const downloadJsonFile = (data, filename) => {
@@ -64,6 +78,7 @@ const App = () => {
         url,
         form_type: formType,
         language,
+        session_id: sessionId,
       });
       console.log("Server response:", response.data);
       setChatHistory((prev) => {
@@ -111,7 +126,8 @@ const App = () => {
           html_input: htmlInput,
           is_file: isFile,
           language,
-        }
+          session_id: sessionId,
+        },
       );
       console.log("Server response:", response.data);
       setChatHistory((prev) => {
@@ -196,6 +212,24 @@ const App = () => {
     setChatHistory([]);
     setError("");
     setResponses({});
+    setShowConversationalChat(false);
+    setCurrentFormData(null);
+  };
+
+  const startConversationalChat = (formData) => {
+    setCurrentFormData({
+      ...formData,
+      form_id: formData.form_id || 1, // You may need to get this from the parsed form
+      form_title: formData.form_title || "Form",
+      language: language,
+    });
+    setShowConversationalChat(true);
+  };
+
+  const handleConversationComplete = (summary) => {
+    console.log("Conversation completed:", summary);
+    setShowConversationalChat(false);
+    // You can add logic here to handle the completion, like showing a success message
   };
 
   const toggleProfileDropdown = () => {
@@ -253,8 +287,8 @@ const App = () => {
             .map((opt) => opt.translated_text || opt.text)
             .join(", ")
         : field.options
-        ? field.options.map((opt) => opt.text).join(", ")
-        : "N/A";
+          ? field.options.map((opt) => opt.text).join(", ")
+          : "N/A";
 
       fields.push({ label, name, fieldType, required, options });
     });
@@ -312,7 +346,7 @@ const App = () => {
     }
 
     const fields = flattenSchema(
-      response.translated_form_schema || response.form_schema
+      response.translated_form_schema || response.form_schema,
     );
 
     return (
@@ -380,7 +414,7 @@ const App = () => {
             <ul>
               {response.questions.map((q, idx) => {
                 const field = response.form_schema.forms[0].fields.find(
-                  (f) => f.id === q.field_id
+                  (f) => f.id === q.field_id,
                 );
                 return (
                   <li key={idx}>
@@ -423,6 +457,14 @@ const App = () => {
             >
               {loading ? "Autofilling..." : "Autofill Form"}
             </button>
+            <button
+              className="cyberpunk-btn chat-btn"
+              onClick={() => startConversationalChat(response)}
+              disabled={loading}
+              style={{ marginLeft: "10px" }}
+            >
+              Start Chat
+            </button>
           </div>
         )}
         {response.gemini_url && (
@@ -448,7 +490,7 @@ const App = () => {
                 <p>
                   <strong>Filled Fields:</strong>{" "}
                   {chatHistory[index].autofill_response.filled_fields.join(
-                    ", "
+                    ", ",
                   )}
                 </p>
                 {chatHistory[index].autofill_response.screenshots.length >
@@ -456,7 +498,7 @@ const App = () => {
                   <p>
                     <strong>Screenshots:</strong>{" "}
                     {chatHistory[index].autofill_response.screenshots.join(
-                      ", "
+                      ", ",
                     )}
                   </p>
                 )}
@@ -487,194 +529,207 @@ const App = () => {
 
   return (
     <div className="app-container">
-      <header>
-        <div className="header-content">
-          <h1 className="logo">Chat2Fill</h1>
-          <nav>
-            <a
-              href="#home"
-              className={mode === "url" ? "active" : ""}
-              onClick={() => setMode("url")}
-            >
-              Home
-            </a>
-            <a
-              href="#parse"
-              className={mode === "html" ? "active" : ""}
-              onClick={() => setMode("html")}
-            >
-              Parse HTML
-            </a>
-            <a href="#history">Autofill History</a>
-          </nav>
-          <div className="profile-container" ref={profileRef}>
-            <div className="profile-icon" onClick={toggleProfileDropdown}>
-              <svg viewBox="0 0 24 24" fill="var(--text-primary)">
-                <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z" />
-              </svg>
-            </div>
-            {isProfileOpen && (
-              <div className="profile-dropdown">
-                <button onClick={() => handleProfileAction("profile")}>
-                  Profile
-                </button>
-                <button onClick={() => handleProfileAction("logout")}>
-                  Logout
-                </button>
-              </div>
-            )}
-          </div>
-        </div>
-      </header>
-
-      <main>
-        <div className="chat-container">
-          <div className="chat-history">
-            {chatHistory.map((chat, index) => (
-              <div key={index} className="chat-message">
-                <div className="query">
-                  <p className="timestamp">
-                    {new Date(chat.query.timestamp).toLocaleString()}
-                  </p>
-                  {renderQuery(chat.query)}
-                </div>
-                {renderResponse(chat.response, index)}
-              </div>
-            ))}
-            <div ref={chatEndRef} />
-          </div>
-
-          <div className="input-section">
-            <div className="tabs">
-              <button
-                className={mode === "url" ? "active" : ""}
-                onClick={() => setMode("url")}
-              >
-                URL Form
-              </button>
-              <button
-                className={mode === "html" ? "active" : ""}
-                onClick={() => setMode("html")}
-              >
-                HTML Form
-              </button>
-              <button className="clear-btn cyberpunk-btn" onClick={clearChat}>
-                Clear Chat
-              </button>
-            </div>
-
-            <div className="form-group">
-              <label>
-                Language:
-                <select
-                  value={language}
-                  onChange={(e) => setLanguage(e.target.value)}
+      {showConversationalChat && currentFormData ? (
+        <ConversationalChat
+          formData={currentFormData}
+          sessionId={sessionId}
+          onComplete={handleConversationComplete}
+        />
+      ) : (
+        <>
+          <header>
+            <div className="header-content">
+              <h1 className="logo">Chat2Fill</h1>
+              <nav>
+                <a
+                  href="#home"
+                  className={mode === "url" ? "active" : ""}
+                  onClick={() => setMode("url")}
                 >
-                  <option value="en">English</option>
-                  <option value="hi">Hindi</option>
-                  <option value="te">Telugu</option>
-                  <option value="ta">Tamil</option>
-                  <option value="bn">Bengali</option>
-                </select>
-              </label>
-            </div>
-
-            {mode === "url" ? (
-              <form onSubmit={handleUrlSubmit} className="input-form">
-                <div className="form-group">
-                  <input
-                    type="text"
-                    value={url}
-                    onChange={(e) => setUrl(e.target.value)}
-                    placeholder="Enter form URL"
-                    required
-                  />
+                  Home
+                </a>
+                <a
+                  href="#parse"
+                  className={mode === "html" ? "active" : ""}
+                  onClick={() => setMode("html")}
+                >
+                  Parse HTML
+                </a>
+                <a href="#history">Autofill History</a>
+              </nav>
+              <div className="profile-container" ref={profileRef}>
+                <div className="profile-icon" onClick={toggleProfileDropdown}>
+                  <svg viewBox="0 0 24 24" fill="var(--text-primary)">
+                    <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z" />
+                  </svg>
                 </div>
-                <div className="form-group">
-                  <select
-                    value={formType}
-                    onChange={(e) => setFormType(e.target.value)}
+                {isProfileOpen && (
+                  <div className="profile-dropdown">
+                    <button onClick={() => handleProfileAction("profile")}>
+                      Profile
+                    </button>
+                    <button onClick={() => handleProfileAction("logout")}>
+                      Logout
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+          </header>
+
+          <main>
+            <div className="chat-container">
+              <div className="chat-history">
+                {chatHistory.map((chat, index) => (
+                  <div key={index} className="chat-message">
+                    <div className="query">
+                      <p className="timestamp">
+                        {new Date(chat.query.timestamp).toLocaleString()}
+                      </p>
+                      {renderQuery(chat.query)}
+                    </div>
+                    {renderResponse(chat.response, index)}
+                  </div>
+                ))}
+                <div ref={chatEndRef} />
+              </div>
+
+              <div className="input-section">
+                <div className="tabs">
+                  <button
+                    className={mode === "url" ? "active" : ""}
+                    onClick={() => setMode("url")}
                   >
-                    <option value="google">Google</option>
-                    <option value="typeform">Typeform</option>
-                    <option value="microsoft">Microsoft</option>
-                    <option value="custom">Custom</option>
-                  </select>
+                    URL Form
+                  </button>
+                  <button
+                    className={mode === "html" ? "active" : ""}
+                    onClick={() => setMode("html")}
+                  >
+                    HTML Form
+                  </button>
+                  <button
+                    className="clear-btn cyberpunk-btn"
+                    onClick={clearChat}
+                  >
+                    Clear Chat
+                  </button>
                 </div>
-                <button
-                  type="submit"
-                  className="cyberpunk-btn"
-                  disabled={loading}
-                >
-                  {loading ? "Parsing..." : "Parse"}
-                </button>
-              </form>
-            ) : (
-              <form onSubmit={handleHtmlSubmit} className="input-form">
+
                 <div className="form-group">
                   <label>
-                    <input
-                      type="checkbox"
-                      checked={isFile}
-                      onChange={(e) => setIsFile(e.target.checked)}
-                    />
-                    File Path
+                    Language:
+                    <select
+                      value={language}
+                      onChange={(e) => setLanguage(e.target.value)}
+                    >
+                      <option value="en">English</option>
+                      <option value="hi">Hindi</option>
+                      <option value="te">Telugu</option>
+                      <option value="ta">Tamil</option>
+                      <option value="bn">Bengali</option>
+                    </select>
                   </label>
                 </div>
-                <div className="form-group">
-                  <textarea
-                    value={htmlInput}
-                    onChange={(e) => setHtmlInput(e.target.value)}
-                    placeholder={
-                      isFile ? "Enter file path" : "Paste HTML content"
-                    }
-                    rows={4}
-                    required
-                  />
-                </div>
-                <button
-                  type="submit"
-                  className="cyberpunk-btn"
-                  disabled={loading}
+
+                {mode === "url" ? (
+                  <form onSubmit={handleUrlSubmit} className="input-form">
+                    <div className="form-group">
+                      <input
+                        type="text"
+                        value={url}
+                        onChange={(e) => setUrl(e.target.value)}
+                        placeholder="Enter form URL"
+                        required
+                      />
+                    </div>
+                    <div className="form-group">
+                      <select
+                        value={formType}
+                        onChange={(e) => setFormType(e.target.value)}
+                      >
+                        <option value="google">Google</option>
+                        <option value="typeform">Typeform</option>
+                        <option value="microsoft">Microsoft</option>
+                        <option value="custom">Custom</option>
+                      </select>
+                    </div>
+                    <button
+                      type="submit"
+                      className="cyberpunk-btn"
+                      disabled={loading}
+                    >
+                      {loading ? "Parsing..." : "Parse"}
+                    </button>
+                  </form>
+                ) : (
+                  <form onSubmit={handleHtmlSubmit} className="input-form">
+                    <div className="form-group">
+                      <label>
+                        <input
+                          type="checkbox"
+                          checked={isFile}
+                          onChange={(e) => setIsFile(e.target.checked)}
+                        />
+                        File Path
+                      </label>
+                    </div>
+                    <div className="form-group">
+                      <textarea
+                        value={htmlInput}
+                        onChange={(e) => setHtmlInput(e.target.value)}
+                        placeholder={
+                          isFile ? "Enter file path" : "Paste HTML content"
+                        }
+                        rows={4}
+                        required
+                      />
+                    </div>
+                    <button
+                      type="submit"
+                      className="cyberpunk-btn"
+                      disabled={loading}
+                    >
+                      {loading ? "Parsing..." : "Parse"}
+                    </button>
+                  </form>
+                )}
+              </div>
+            </div>
+          </main>
+
+          <footer>
+            <div className="footer-content">
+              <p>&copy; 2025 Chat2Fill. All rights reserved.</p>
+              <p>Developed by Atharv, Juhi, Kunal - Team</p>
+              <p>
+                Contact:{" "}
+                <a href="mailto:support@chat2fill.com">support@chat2fill.com</a>
+              </p>
+              <p>
+                Follow us:
+                <a
+                  href="https://x.com/chat2fill"
+                  target="_blank"
+                  rel="noopener noreferrer"
                 >
-                  {loading ? "Parsing..." : "Parse"}
-                </button>
-              </form>
-            )}
-          </div>
-        </div>
-      </main>
+                  X
+                </a>{" "}
+                |
+                <a
+                  href="https://linkedin.com/company/chat2fill"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  LinkedIn
+                </a>
+              </p>
+            </div>
+          </footer>
 
-      <footer>
-        <div className="footer-content">
-          <p>&copy; 2025 Chat2Fill. All rights reserved.</p>
-          <p>Developed by Atharv, Juhi, Kunal - Team</p>
-          <p>
-            Contact:{" "}
-            <a href="mailto:support@chat2fill.com">support@chat2fill.com</a>
-          </p>
-          <p>
-            Follow us:
-            <a
-              href="https://x.com/chat2fill"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              X
-            </a>{" "}
-            |
-            <a
-              href="https://linkedin.com/company/chat2fill"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              LinkedIn
-            </a>
-          </p>
-        </div>
-      </footer>
-
-      {error && <div className="error-message">{error}</div>}
+          {error && <div className="error-message">{error}</div>}
+        </>
+      )}
     </div>
   );
 };
