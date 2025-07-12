@@ -193,3 +193,7 @@ The FastAPI server is located in the `project/server` directory.
   | Which Job are you Looking for? | which_job_are_you_looking_for? | Paragraph Text | No | N/A |
   | Are you a: | are_you_a: | Dropdown | No | [e.g., Job Seeker, Employer] |
 - **Server**: The FastAPI server runs on `http://localhost:8000` and responds to `/parse_form` and `/parse_html_form` requests.
+
+### 6. Future Updates:
+1. While our project gives multilingual support (namely Hindi, Bengali, Tamil, Telugu), right now, we provide this capability via Llama 3.2. If we proceed with this, we would utilize paid models, which are faster and can cover many more languages.
+2. We plan to integrate Text-to-Speech (TTS) and Speech-to-Text (STT) so that the conversation becomes more seamless.
