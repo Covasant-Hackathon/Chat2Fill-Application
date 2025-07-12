@@ -1,4 +1,0 @@
-1)
-See till now, I am parsing a form and giving the output the user as a json and tabular format on my page. and then I am generating prompts related to the form fields or table columns, i.e "Full name" then "what is your full name".
-Now I want to first implement a database to handle all thesee. Like user session, So every user comes to site, should have a user session, then the form it parsed link and all the details should be there in the database, an the propmps generated related to that field should be there in the datase. Further there should somewhee in the databse that multilingual reponses it can handle, stores both in "english" and user preffered langugae, then the user reponses should also be saved properly in the database.
-Organize this project properly to use the database properly. Ig I have already sqlite3 install in my windows. so do it properly by testing also.
