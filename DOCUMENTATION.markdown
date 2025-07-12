@@ -60,24 +60,6 @@ git clone <repository-url>
 cd Covasant_Hackathon
 ```
 
-1.1 **Juhi**:
-
-```bash
-git fetch
-git checkout juhi
-git merge origin/main
-git push
-```
-
-1.2 **Kunal**:
-
-```bash
-git fetch
-git checkout kunal
-git merge origin/main
-git push
-```
-
 ### 2. Set Up the Client
 
 The React client is located in the `project/client` directory.
